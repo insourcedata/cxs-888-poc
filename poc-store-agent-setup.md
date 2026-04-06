@@ -15,107 +15,23 @@ Before starting, confirm:
 
 - [ ] RDP access to the store server
 - [ ] Windows Server with PowerShell 5.1+ (pre-installed on all Windows Server 2016+)
-- [ ] SQL Server running on localhost with LS Central database
+- [ ] SQL Server running with LS Central database
 - [ ] Store server can reach the internet (outbound HTTPS port 443)
 - [ ] CXS API URL: `https://888.insourcedata.org/api/collect`
 - [ ] CXS API Key: `065a4a89d962bfcb35ffa1bf757ac0f3d1b9276098b5514c207492cf333d3217`
 
 Store-specific values needed:
 
-| Value | Example (SM Marilao) | Where to Find |
-|-------|---------------------|---------------|
-| SQL Server hostname | `localhost` | Usually localhost |
-| Database name | `WSMOD8` | SSMS → Databases list |
-| Store code | `S059` | LS Central store setup |
-| Oracle code | `4020` | Wendy's mapping |
-| Company name | `WENDYS PH` | SSMS → LS Central tables prefix |
-| ExtGuid | `5ecfc871-5d82-43f1-9c54-59685e82318d` | LS Central table suffix |
+| Value | Example (UAT — FTI Complex) | Where to Find |
+|-------|----------------------------|---------------|
+| SQL Server instance | `ITLAB-SVR-AZ\np-master` | SSMS title bar or connection dialog |
+| Database name | `NEWPOS` | SSMS → Object Explorer → Databases |
+| Store code | `DK003` | CXS store mapping (ask Arshath) |
+| Oracle code | `4058` | LS Central `Store No_` column |
+| Company name | `WENDYS PH` | SSMS → Tables prefix |
+| ExtGuid | `5ecfc871-5d82-43f1-9c54-59685e82318d` | SSMS → Table name suffix |
 
----
-
-## Step 1: Create the CXS Directory
-
-Open PowerShell **as Administrator** on the store server:
-
-```powershell
-# Create directory structure
-New-Item -ItemType Directory -Path "C:\CXS" -Force
-New-Item -ItemType Directory -Path "C:\CXS\logs" -Force
-```
-
-**Validate:** Confirm directories were created:
-
-```powershell
-Test-Path "C:\CXS", "C:\CXS\logs"
-```
-
-Expected output — both should return `True`:
-```
-True
-True
-```
-
----
-
-## Step 2: Copy the Scripts
-
-Copy these two files to `C:\CXS\` on the store server:
-
-1. **`cxs-collector.ps1`** — the main sync script
-2. **`install-cxs-collector.ps1`** — the installer (sets up scheduled task)
-
-You can copy via:
-- USB drive
-- Shared folder
-- Direct paste into Notepad and save as `.ps1`
-
-**Validate:** Confirm both scripts exist:
-
-```powershell
-Get-ChildItem C:\CXS\*.ps1 | Select-Object Name, Length
-```
-
-Expected output:
-```
-Name                        Length
-----                        ------
-cxs-collector.ps1             ~6KB
-install-cxs-collector.ps1     ~5KB
-```
-
-Both files must be present before continuing.
-
----
-
-## Step 3: Configure the Collector Script
-
-Open `C:\CXS\cxs-collector.ps1` in Notepad or ISE. Update the `$Config` block at the top:
-
-```powershell
-$Config = @{
-    # CXS collector endpoint
-    ApiUrl     = "https://888.insourcedata.org/api/collect"
-    ApiKey     = "065a4a89d962bfcb35ffa1bf757ac0f3d1b9276098b5514c207492cf333d3217"
-
-    # SQL Server — Windows Auth, no password needed
-    SqlServer  = "localhost"                 # ← Change if named instance (e.g. "SERVERNAME\INSTANCE")
-    Database   = "WSMOD8"                    # ← Change per store
-
-    # LS Central table identifiers
-    Company    = "WENDYS PH"
-    ExtGuid    = "5ecfc871-5d82-43f1-9c54-59685e82318d"
-
-    # Store identifier
-    StoreCode  = "S059"                      # ← Change per store
-    OracleCode = "4020"                      # ← Change per store
-
-    # Leave these as-is
-    StateFile  = "C:\CXS\last-sync.json"
-    LogFile    = "C:\CXS\logs\sync.log"
-}
-```
-
-**Values to change per store:**
+**Store config reference:**
 
 | Store | SqlServer | Database | StoreCode | OracleCode |
 |-------|-----------|----------|-----------|------------|
@@ -124,32 +40,108 @@ $Config = @{
 | Cubao | TBD | TBD | S002 | TBD |
 | SM Clark | TBD | TBD | S085 | TBD |
 
-Save the file.
+---
 
-**Validate:** Confirm the config was saved correctly:
+## Step 1: RDP into the Store Server
+
+Connect to the store server via Remote Desktop (e.g. `10.10.30.6` for UAT).
+
+**Validate:** You are logged in and can see the Windows desktop.
+
+---
+
+## Step 2: Open PowerShell as Administrator
+
+Right-click the Windows Start menu → **Windows PowerShell (Admin)**
+
+**Validate:** The PowerShell window title shows `Administrator` and the prompt appears.
+
+---
+
+## Step 3: Create the CXS Directory
 
 ```powershell
-Select-String -Path "C:\CXS\cxs-collector.ps1" -Pattern "ApiUrl|Database|StoreCode|OracleCode" | Select-Object -First 4
+New-Item -ItemType Directory -Path "C:\CXS" -Force
+New-Item -ItemType Directory -Path "C:\CXS\logs" -Force
 ```
 
-Expected output — should show your store's values (not `CHANGE_ME`):
+**Validate:**
+
+```powershell
+Test-Path "C:\CXS", "C:\CXS\logs"
 ```
-ApiUrl     = "https://888.insourcedata.org/api/collect"
-Database   = "WSMOD8"
-StoreCode  = "S059"
-OracleCode = "4020"
+
+Both return `True`.
+
+---
+
+## Step 4: Copy the Scripts
+
+Copy these two files (provided by CXS) to `C:\CXS\` on the store server:
+
+1. **`cxs-collector.ps1`** — the main sync script
+2. **`install-cxs-collector.ps1`** — the installer (sets up scheduled task)
+
+You can copy via:
+- Email attachment (zip first — `.ps1` may be blocked)
+- Teams / shared folder
+- USB drive
+- Paste content into Notepad → Save As `.ps1`
+
+**Validate:**
+
+```powershell
+Get-ChildItem C:\CXS\*.ps1 | Select-Object Name, Length
+```
+
+Expected — both files present:
+```
+Name                        Length
+----                        ------
+cxs-collector.ps1             ~7KB
+install-cxs-collector.ps1     ~5KB
 ```
 
 ---
 
-## Step 4: Verify SQL Server Connectivity
+## Step 5: Configure the Collector Script
 
-Test that we can reach the database (replace server and database with your store's values):
+Open `C:\CXS\cxs-collector.ps1` in Notepad or ISE. Update the `$Config` block at the top.
+
+**For UAT (FTI Complex):**
 
 ```powershell
-# Change these to match your store
-$server = "ITLAB-SVR-AZ\np-master"   # or "localhost" for production stores
-$database = "NEWPOS"                  # or "WSMOD8" etc.
+$Config = @{
+    ApiUrl     = "https://888.insourcedata.org/api/collect"
+    ApiKey     = "065a4a89d962bfcb35ffa1bf757ac0f3d1b9276098b5514c207492cf333d3217"
+    SqlServer  = "ITLAB-SVR-AZ\np-master"
+    Database   = "NEWPOS"
+    Company    = "WENDYS PH"
+    ExtGuid    = "5ecfc871-5d82-43f1-9c54-59685e82318d"
+    StoreCode  = "DK003"
+    OracleCode = "4058"
+    StateFile  = "C:\CXS\last-sync.json"
+    LogFile    = "C:\CXS\logs\sync.log"
+}
+```
+
+Save the file.
+
+**Validate:**
+
+```powershell
+Select-String -Path "C:\CXS\cxs-collector.ps1" -Pattern "SqlServer|Database|StoreCode|OracleCode" | Select-Object -First 4
+```
+
+Should show `ITLAB-SVR-AZ\np-master`, `NEWPOS`, `DK003`, `4058`.
+
+---
+
+## Step 6: Test SQL Server Connection
+
+```powershell
+$server = "ITLAB-SVR-AZ\np-master"
+$database = "NEWPOS"
 
 $connString = "Server=$server;Database=$database;Integrated Security=True;TrustServerCertificate=True;"
 $conn = New-Object System.Data.SqlClient.SqlConnection($connString)
@@ -158,193 +150,183 @@ Write-Host "SQL Server connection: OK ($server / $database)" -ForegroundColor Gr
 $conn.Close()
 ```
 
-**Validate:** You should see:
+**Validate:** You see:
 ```
 SQL Server connection: OK (ITLAB-SVR-AZ\np-master / NEWPOS)
 ```
 
-If this fails:
+If it fails:
 - Check SQL Server is running: `Get-Service MSSQL*`
-- Check database name in SSMS
-- Try `Server=.\SQLEXPRESS` or the full `SERVERNAME\INSTANCE` if not on default instance
-- Check the instance name in SSMS title bar (e.g. `EIGHT8ATE\np-master`)
+- Verify the instance name in SSMS title bar (e.g. `EIGHT8ATE\np-master`)
+- Try: `Server=localhost\np-master` or `Server=.\np-master`
 
-**Do not proceed until this step passes.**
+**Stop here if this fails.**
 
 ---
 
-## Step 5: Verify LS Central Tables Exist
+## Step 7: Test LS Central Tables Exist
 
 ```powershell
-# Use the same server/database from Step 4
 $connString = "Server=$server;Database=$database;Integrated Security=True;TrustServerCertificate=True;"
 $conn = New-Object System.Data.SqlClient.SqlConnection($connString)
 $conn.Open()
-
 $cmd = $conn.CreateCommand()
-$cmd.CommandText = "SELECT TOP 1 * FROM [WENDYS PH`$LSC Transaction Header`$5ecfc871-5d82-43f1-9c54-59685e82318d]"
-$adapter = New-Object System.Data.SqlClient.SqlDataAdapter($cmd)
-$dt = New-Object System.Data.DataTable
-[void]$adapter.Fill($dt)
-
-Write-Host "Transaction Header table: OK ($($dt.Rows.Count) row returned)" -ForegroundColor Green
+$cmd.CommandText = "SELECT COUNT(*) FROM [WENDYS PH`$LSC Transaction Header`$5ecfc871-5d82-43f1-9c54-59685e82318d] WHERE [Date] > '2026-03-01'"
+$count = $cmd.ExecuteScalar()
+Write-Host "Transaction rows since Mar 1: $count" -ForegroundColor Green
 $conn.Close()
 ```
 
-**Validate:** You should see:
-```
-Transaction Header table: OK (1 row returned)
-```
-
-If it says `0 rows`, the table exists but may be empty — check the date range or confirm transactions exist in SSMS.
+**Validate:** Number > 0 (UAT shows ~18,997 total rows).
 
 If this fails:
-- The Company name or ExtGuid may be different — check in SSMS under Tables
-- Look for tables starting with `WENDYS PH$LSC`
+- Check Company name and ExtGuid — look in SSMS under Tables for `WENDYS PH$LSC`
+- The table may have a different ExtGuid on this server
 
-**Do not proceed until this step passes.**
+**Stop here if this fails.**
 
 ---
 
-## Step 6: Verify Internet / API Connectivity
+## Step 8: Test Network / DNS / API Connectivity
+
+Run all three checks in order:
+
+**8a. DNS resolution:**
 
 ```powershell
-# Test HTTPS connectivity to CXS collector
+Resolve-DnsName 888.insourcedata.org
+```
+
+**Validate:** Returns an IP address (Cloudflare). If it fails, DNS can't resolve our domain — ask the network team to allow DNS resolution for `888.insourcedata.org`, or try:
+
+```powershell
+# Test with Google DNS directly
+Resolve-DnsName 888.insourcedata.org -Server 8.8.8.8
+```
+
+**Stop here if DNS fails.**
+
+**8b. TCP connectivity:**
+
+```powershell
+Test-NetConnection 888.insourcedata.org -Port 443
+```
+
+**Validate:** `TcpTestSucceeded : True`
+
+If `False`:
+- Check proxy: `netsh winhttp show proxy`
+- Ask network team to whitelist outbound HTTPS (port 443) to `888.insourcedata.org`
+
+**Stop here if TCP fails.**
+
+**8c. HTTPS API call (with TLS 1.2):**
+
+```powershell
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 try {
-    $headers = @{ "Authorization" = "Bearer 065a4a89d962bfcb35ffa1bf757ac0f3d1b9276098b5514c207492cf333d3217" }
-    $response = Invoke-WebRequest -Uri "https://888.insourcedata.org/api/collect/health" -Method POST -Headers $headers -TimeoutSec 10
-    Write-Host "API connection: OK (Status $($response.StatusCode))" -ForegroundColor Green
+    $h = @{ "Authorization" = "Bearer 065a4a89d962bfcb35ffa1bf757ac0f3d1b9276098b5514c207492cf333d3217" }
+    $r = Invoke-WebRequest -Uri "https://888.insourcedata.org/api/collect/health" -Method POST -Headers $h -TimeoutSec 30
+    Write-Host "API connection: OK (Status $($r.StatusCode))" -ForegroundColor Green
 } catch {
     Write-Host "API connection: FAILED — $_" -ForegroundColor Red
-    Write-Host "Check: Can this server reach the internet?" -ForegroundColor Yellow
 }
 ```
 
-**Validate:** You should see:
-```
-API connection: OK (Status 200)
-```
+**Validate:** `API connection: OK (Status 200)`
 
-If this fails:
-- Check if the server has internet access: `Test-NetConnection google.com -Port 443`
-- Check if there's a proxy: `netsh winhttp show proxy`
-- Ask network team if outbound HTTPS (port 443) is allowed
+If timeout or fails:
+- If DNS and TCP passed but HTTPS fails → likely TLS issue or firewall doing SSL inspection
+- Check if there's a corporate proxy: `[System.Net.WebRequest]::DefaultWebProxy.GetProxy("https://888.insourcedata.org")`
+- Try bypassing proxy: add `-Proxy ([System.Net.GlobalProxySelection]::GetEmptyWebProxy())` to the `Invoke-WebRequest` call
+- Ask network team if there's a firewall or SSL inspection appliance blocking outbound HTTPS
 
-**Do not proceed until this step passes.** All three checks (SQL, tables, API) must pass before running the sync.
+**All three checks (DNS, TCP, HTTPS) must pass before proceeding.**
 
 ---
 
-## Step 7: Run the Script Manually (First Test)
+## Step 9: Run the First Sync
 
 ```powershell
 cd C:\CXS
 powershell -ExecutionPolicy Bypass -File .\cxs-collector.ps1
 ```
 
-**Validate — Expected output (success):**
-```
-[2026-04-07 14:30:00] === CXS Sync Start ===
-[2026-04-07 14:30:00] Store: S059 (4020)
-[2026-04-07 14:30:00] Server: localhost / WSMOD8
-[2026-04-07 14:30:00] Sync range: 2026-03-31 to 2026-04-07
-[2026-04-07 14:30:01]   Querying headers ...
-[2026-04-07 14:30:03]     headers: 245 rows
-[2026-04-07 14:30:03]   Querying sales ...
-[2026-04-07 14:30:08]     sales: 1820 rows
-[2026-04-07 14:30:08]   Querying payments ...
-[2026-04-07 14:30:10]     payments: 312 rows
-[2026-04-07 14:30:10] Total rows: 2377
-[2026-04-07 14:30:10] Sending to https://888.insourcedata.org/api/collect ...
-[2026-04-07 14:30:12] POST successful: accepted
-[2026-04-07 14:30:12] Last sync updated to: 2026-04-07
-[2026-04-07 14:30:12] === CXS Sync Complete ===
-```
-
-Check for these **pass criteria**:
-- [ ] Row counts > 0 for headers, sales, payments
-- [ ] `POST successful: accepted` (not `ERROR posting data`)
-- [ ] `Last sync updated to:` line appears
+**Validate — all must be true:**
+- [ ] `headers: XX rows` — number > 0
+- [ ] `sales: XX rows` — number > 0
+- [ ] `payments: XX rows` — number > 0
+- [ ] `POST successful: accepted`
+- [ ] `=== CXS Sync Complete ===`
 - [ ] No `ERROR` lines in the output
 
 **If no data:**
 ```
-No new data since 2026-03-31 — skipping POST
+No new data since 2026-03-30 — skipping POST
 ```
-This means the date range has no transactions. Delete the state file to reset and retry:
+Delete the state file to reset and retry:
 ```powershell
 Remove-Item C:\CXS\last-sync.json -ErrorAction SilentlyContinue
 ```
+Then re-run the script.
 
 ---
 
-## Step 8: Validate Data on CXS Side
-
-After the script runs successfully, confirm data arrived by checking the collector status:
+## Step 10: Verify Data Arrived on CXS Side
 
 ```powershell
-$headers = @{ "Authorization" = "Bearer 065a4a89d962bfcb35ffa1bf757ac0f3d1b9276098b5514c207492cf333d3217" }
-$status = Invoke-RestMethod -Uri "https://888.insourcedata.org/api/collect/status" -Method GET -Headers $headers
-$status | ConvertTo-Json
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$h = @{ "Authorization" = "Bearer 065a4a89d962bfcb35ffa1bf757ac0f3d1b9276098b5514c207492cf333d3217" }
+$s = Invoke-RestMethod -Uri "https://888.insourcedata.org/api/collect/status" -Method GET -Headers $h
+Write-Host "Queued: $($s.queued)  Processed: $($s.processed)  Failed: $($s.failed)" -ForegroundColor Cyan
 ```
 
-**Validate:** Check the response:
+**Validate:**
+- [ ] `Processed` increased by 1
+- [ ] `Failed` did NOT increase
+- [ ] `Queued` is 0
 
-```json
-{
-  "queued": 0,
-  "processed": 1,
-  "failed": 0,
-  "processing": false
-}
-```
-
-- [ ] `processed` count increased by 1 compared to before Step 7
-- [ ] `failed` count did NOT increase
-- [ ] `queued` is 0 (payload was picked up and processed)
-
-If `failed` increased, the payload was received but processing failed — notify Arshath with the store code and timestamp.
-
-Also verify the state file was updated:
+Also check the sync state file:
 
 ```powershell
 Get-Content C:\CXS\last-sync.json
 ```
 
-Expected:
+**Validate:** `lastSyncDate` shows today's date:
 ```json
 {
-  "lastSyncDate": "2026-04-07",
-  "lastSyncTime": "2026-04-07 14:30:12",
-  "storeCode": "S059"
+  "lastSyncDate": "2026-04-06",
+  "lastSyncTime": "2026-04-06 ...",
+  "storeCode": "DK003"
 }
 ```
 
+If `Failed` increased, notify Arshath with the store code and timestamp.
+
 ---
 
-## Step 9: Cross-Check Transaction Counts
+## Step 11: Cross-Check Transaction Counts
 
-To validate data accuracy, run this in SSMS on the store server for the same date range:
+Run in SSMS on the store server for the same date range:
 
 ```sql
--- Count transactions for a specific date
 SELECT COUNT(*) as txn_count,
        SUM([Net Amount]) as total_net
 FROM [WENDYS PH$LSC Transaction Header$5ecfc871-5d82-43f1-9c54-59685e82318d]
 WHERE [Transaction Type] = 2
-AND [Date] > '2026-04-01'
+AND [Date] > '2026-03-30'
 ```
 
-**Validate:** Compare these numbers with what the CXS dashboard shows for the same store and date range:
-
-- [ ] Transaction count from SSMS matches the `headers: N rows` from Step 7 output
-- [ ] Total net amount from SSMS approximately matches dashboard total for the same period
+**Validate:**
+- [ ] `txn_count` matches the `headers: N rows` from Step 9 output
+- [ ] `total_net` approximately matches what the CXS dashboard shows
 - [ ] If counts differ significantly (>5%), notify Arshath with both numbers
 
 ---
 
-## Step 10: Install Scheduled Task (Automated Daily Sync)
+## Step 12: Install Scheduled Task (Automated Daily Sync)
 
-Once manual test is successful, install the scheduled task for automatic daily sync:
+Once manual test is successful:
 
 ```powershell
 cd C:\CXS
@@ -359,13 +341,7 @@ powershell -ExecutionPolicy Bypass -File .\install-cxs-collector.ps1 `
 
 For production stores using localhost, omit `-SqlServer` (defaults to `localhost`).
 
-This will:
-- Register a Windows Scheduled Task named `CXS Daily Sync`
-- Run daily at **2:00 AM**
-- Run as SYSTEM (no login required)
-- Auto-restart on failure (3 retries, 10-minute intervals)
-
-**Validate:** Confirm the task was created and is ready:
+**Validate:**
 
 ```powershell
 $task = Get-ScheduledTask -TaskName "CXS Daily Sync" -ErrorAction SilentlyContinue
@@ -383,7 +359,7 @@ Expected:
 ```
 Task Name:  CXS Daily Sync
 State:      Ready
-Trigger:    2026-04-07T02:00:00
+Trigger:    2026-04-06T02:00:00
 Run As:     SYSTEM
 ```
 
@@ -393,47 +369,37 @@ Run As:     SYSTEM
 
 ---
 
-## Step 11: Verify Automated Run (Next Day)
+## Step 13: Verify Automated Run (Next Day)
 
-The morning after installation, check that the 2 AM sync ran:
+The morning after installation:
 
 ```powershell
-# Check last sync state
 Get-Content C:\CXS\last-sync.json
 ```
 
-**Validate:** The `lastSyncDate` should be today's date (updated by the 2 AM run):
+**Validate:** `lastSyncDate` should be today's date (updated by the 2 AM run).
 
-```json
-{
-  "lastSyncDate": "2026-04-08",
-  "lastSyncTime": "2026-04-08 02:00:15",
-  "storeCode": "S059"
-}
-```
-
-Check the sync log for errors:
+Check log for errors:
 
 ```powershell
-# Last 30 lines of log
 Get-Content C:\CXS\logs\sync.log -Tail 30
 ```
 
 **Validate:**
-- [ ] Log shows `=== CXS Sync Start ===` and `=== CXS Sync Complete ===` with today's 2 AM timestamp
+- [ ] Log shows `=== CXS Sync Start ===` and `=== CXS Sync Complete ===` with 2 AM timestamp
 - [ ] No `ERROR` lines between start and complete
 - [ ] `POST successful: accepted` is present
 
-If the log doesn't show a 2 AM run, check the scheduled task history:
+If the log doesn't show a 2 AM run:
 
 ```powershell
 Get-ScheduledTask -TaskName "CXS Daily Sync" | Get-ScheduledTaskInfo | Select-Object LastRunTime, LastTaskResult
 ```
 
 - `LastTaskResult` of `0` = success
-- Any other value = failure (check `C:\CXS\logs\sync.log` for details)
+- Any other value = failure (check `C:\CXS\logs\sync.log`)
 
-Also verify on the CXS side using the status endpoint (see Step 8) and confirm with Arshath that overnight data arrived in the dashboard.
+Also verify on the CXS side using the status endpoint (see Step 10).
 
 ---
 
@@ -441,14 +407,16 @@ Also verify on the CXS side using the status endpoint (see Step 8) and confirm w
 
 | Symptom | Likely Cause | Fix |
 |---------|-------------|-----|
-| `ERROR: ApiUrl or ApiKey is missing` | Config not updated | Edit `$Config` in `cxs-collector.ps1` (Step 3) |
-| `ERROR querying headers` | SQL Server not reachable | Check SQL Server service is running, verify database name |
-| `ERROR posting data` | Can't reach CXS API | Check internet connectivity (Step 6) |
-| `No new data since ...` | Date range is empty | Delete `C:\CXS\last-sync.json` to reset, or check if store has transactions |
+| `ERROR: ApiUrl or ApiKey is missing` | Config not updated | Edit `$Config` in `cxs-collector.ps1` (Step 5) |
+| `ERROR querying headers` | SQL Server not reachable | Check SQL Server service, verify instance name and database |
+| `ERROR posting data` / timeout | Can't reach CXS API | Run Step 8 diagnostics (DNS → TCP → HTTPS) |
+| DNS fails (`Resolve-DnsName`) | Internal DNS can't resolve domain | Try `Resolve-DnsName 888.insourcedata.org -Server 8.8.8.8` or ask network team |
+| TCP passes but HTTPS times out | TLS issue or SSL inspection | Ensure TLS 1.2 is forced, check for corporate proxy/firewall |
+| `No new data since ...` | Date range is empty | Delete `C:\CXS\last-sync.json` to reset |
 | Script runs but 0 rows | Wrong database or table names | Verify in SSMS — check Company name and ExtGuid |
 | `Unauthorized` (401) | API key mismatch | Verify the API key in `$Config` matches the one in this guide |
 | Scheduled task not running | Task disabled or SYSTEM can't access SQL | Check Task Scheduler, ensure SQL allows Windows Auth for SYSTEM |
-| `processed` count didn't increase | Collector accepted but processor failed | Check with Arshath — `docker compose logs collector` on server |
+| `processed` count didn't increase | Collector accepted but processor failed | Notify Arshath — server-side processing issue |
 
 ---
 

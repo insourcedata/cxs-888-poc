@@ -44,6 +44,9 @@ $Config = @{
     LogFile    = "C:\CXS\logs\sync.log"
 }
 
+# ─── Force TLS 1.2 (PowerShell 5.1 defaults to TLS 1.0 which most servers reject)
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
 # ─── Validate config ───────────────────────────────────────────────────────────
 if (-not $Config.ApiUrl -or -not $Config.ApiKey -or $Config.ApiUrl -match "CHANGE_ME" -or $Config.ApiKey -eq "CHANGE_ME") {
     Write-Host "ERROR: ApiUrl or ApiKey is missing or still has placeholder values." -ForegroundColor Red

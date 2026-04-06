@@ -121,6 +121,7 @@ catch {
 
 # 4. Test API connectivity
 Write-Host "[4/5] Testing API connectivity..."
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 try {
     $testPayload = @{
         storeCode  = $StoreCode
