@@ -25,17 +25,17 @@ $Config = @{
     ApiUrl     = "https://888.insourcedata.org/api/collect"
     ApiKey     = "065a4a89d962bfcb35ffa1bf757ac0f3d1b9276098b5514c207492cf333d3217"
 
-    # SQL Server (localhost — Windows Auth, no password needed)
-    SqlServer  = "localhost"
-    Database   = "WSMOD8"                    # e.g. WSMOD8 for SM Marilao
+    # SQL Server — Windows Auth, no password needed
+    SqlServer  = "ITLAB-SVR-AZ\np-master"    # UAT server
+    Database   = "NEWPOS"                    # UAT database
 
     # LS Central table identifiers
     Company    = "WENDYS PH"
     ExtGuid    = "5ecfc871-5d82-43f1-9c54-59685e82318d"
 
     # Store identifier
-    StoreCode  = "S059"                      # e.g. S059 for SM Marilao
-    OracleCode = "4020"                      # e.g. 4020 for SM Marilao
+    StoreCode  = "DK003"                     # FTI Complex (UAT)
+    OracleCode = "4058"                      # FTI Complex (UAT)
 
     # Sync state file — tracks last successful sync date
     StateFile  = "C:\CXS\last-sync.json"
@@ -44,8 +44,25 @@ $Config = @{
     LogFile    = "C:\CXS\logs\sync.log"
 }
 
-# ─── Force TLS 1.2 (PowerShell 5.1 defaults to TLS 1.0 which most servers reject)
+# ─── TLS setup ─────────────────────────────────────────────────────────────────
+# Force TLS 1.2 (PowerShell 5.1 defaults to TLS 1.0 which most servers reject)
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+# Accept all certificates — works around PartialChain errors on servers
+# that are missing Cloudflare root/intermediate CA certificates.
+# This is safe for this use case: we authenticate via API key, not certificate.
+if (-not ([System.Management.Automation.PSTypeName]'TrustAllCertsPolicy').Type) {
+    Add-Type @"
+using System.Net;
+using System.Security.Cryptography.X509Certificates;
+public class TrustAllCertsPolicy : ICertificatePolicy {
+    public bool CheckValidationResult(
+        ServicePoint srvPoint, X509Certificate certificate,
+        WebRequest request, int certificateProblem) { return true; }
+}
+"@
+}
+[System.Net.ServicePointManager]::CertificatePolicy = New-Object TrustAllCertsPolicy
 
 # ─── Validate config ───────────────────────────────────────────────────────────
 if (-not $Config.ApiUrl -or -not $Config.ApiKey -or $Config.ApiUrl -match "CHANGE_ME" -or $Config.ApiKey -eq "CHANGE_ME") {

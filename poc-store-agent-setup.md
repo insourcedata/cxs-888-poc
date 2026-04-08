@@ -14,22 +14,12 @@ A PowerShell script runs on the store server, queries the local LS Central SQL S
 Before starting, confirm:
 
 - [ ] RDP access to the store server
-- [ ] Windows Server with PowerShell 5.1+ (pre-installed on all Windows Server 2016+)
+- [ ] Windows Server with PowerShell 5.1+ or 7.x
 - [ ] SQL Server running with LS Central database
 - [ ] Store server can reach the internet (outbound HTTPS port 443)
+- [ ] `*.insourcedata.org` is **whitelisted** on the network firewall (FortiGate blocks it as "Unrated" by default)
 - [ ] CXS API URL: `https://888.insourcedata.org/api/collect`
 - [ ] CXS API Key: `065a4a89d962bfcb35ffa1bf757ac0f3d1b9276098b5514c207492cf333d3217`
-
-Store-specific values needed:
-
-| Value | Example (UAT — FTI Complex) | Where to Find |
-|-------|----------------------------|---------------|
-| SQL Server instance | `ITLAB-SVR-AZ\np-master` | SSMS title bar or connection dialog |
-| Database name | `NEWPOS` | SSMS → Object Explorer → Databases |
-| Store code | `DK003` | CXS store mapping (ask Arshath) |
-| Oracle code | `4058` | LS Central `Store No_` column |
-| Company name | `WENDYS PH` | SSMS → Tables prefix |
-| ExtGuid | `5ecfc871-5d82-43f1-9c54-59685e82318d` | SSMS → Table name suffix |
 
 **Store config reference:**
 
@@ -54,7 +44,7 @@ Connect to the store server via Remote Desktop (e.g. `10.10.30.6` for UAT).
 
 Right-click the Windows Start menu → **Windows PowerShell (Admin)**
 
-**Validate:** The PowerShell window title shows `Administrator` and the prompt appears.
+**Validate:** The PowerShell window title shows `Administrator`.
 
 ---
 
@@ -75,65 +65,43 @@ Both return `True`.
 
 ---
 
-## Step 4: Copy the Scripts
+## Step 4: Copy the Script
 
-Copy these two files (provided by CXS) to `C:\CXS\` on the store server:
-
-1. **`cxs-collector.ps1`** — the main sync script
-2. **`install-cxs-collector.ps1`** — the installer (sets up scheduled task)
+Save `cxs-collector.ps1` (provided by CXS) to `C:\CXS\` on the store server.
 
 You can copy via:
+- Paste content into Notepad → Save As `C:\CXS\cxs-collector.ps1`
 - Email attachment (zip first — `.ps1` may be blocked)
-- Teams / shared folder
-- USB drive
-- Paste content into Notepad → Save As `.ps1`
+- Teams / shared folder / USB drive
+
+> **Note:** The script provided already has the UAT config (ITLAB-SVR-AZ\np-master, NEWPOS, DK003) pre-filled.
+> No editing needed for UAT. For other stores, edit the `$Config` block at the top.
 
 **Validate:**
 
 ```powershell
-Get-ChildItem C:\CXS\*.ps1 | Select-Object Name, Length
+Test-Path "C:\CXS\cxs-collector.ps1"
 ```
 
-Expected — both files present:
-```
-Name                        Length
-----                        ------
-cxs-collector.ps1             ~7KB
-install-cxs-collector.ps1     ~5KB
-```
+Returns `True`.
 
 ---
 
-## Step 5: Configure the Collector Script
-
-Open `C:\CXS\cxs-collector.ps1` in Notepad or ISE. Update the `$Config` block at the top.
-
-**For UAT (FTI Complex):**
-
-```powershell
-$Config = @{
-    ApiUrl     = "https://888.insourcedata.org/api/collect"
-    ApiKey     = "065a4a89d962bfcb35ffa1bf757ac0f3d1b9276098b5514c207492cf333d3217"
-    SqlServer  = "ITLAB-SVR-AZ\np-master"
-    Database   = "NEWPOS"
-    Company    = "WENDYS PH"
-    ExtGuid    = "5ecfc871-5d82-43f1-9c54-59685e82318d"
-    StoreCode  = "DK003"
-    OracleCode = "4058"
-    StateFile  = "C:\CXS\last-sync.json"
-    LogFile    = "C:\CXS\logs\sync.log"
-}
-```
-
-Save the file.
-
-**Validate:**
+## Step 5: Verify Config Values
 
 ```powershell
 Select-String -Path "C:\CXS\cxs-collector.ps1" -Pattern "SqlServer|Database|StoreCode|OracleCode" | Select-Object -First 4
 ```
 
-Should show `ITLAB-SVR-AZ\np-master`, `NEWPOS`, `DK003`, `4058`.
+**Validate:** Should show:
+```
+SqlServer  = "ITLAB-SVR-AZ\np-master"
+Database   = "NEWPOS"
+StoreCode  = "DK003"
+OracleCode = "4058"
+```
+
+If values are wrong, open `C:\CXS\cxs-collector.ps1` in Notepad and edit the `$Config` block.
 
 ---
 
@@ -155,10 +123,7 @@ $conn.Close()
 SQL Server connection: OK (ITLAB-SVR-AZ\np-master / NEWPOS)
 ```
 
-If it fails:
-- Check SQL Server is running: `Get-Service MSSQL*`
-- Verify the instance name in SSMS title bar (e.g. `EIGHT8ATE\np-master`)
-- Try: `Server=localhost\np-master` or `Server=.\np-master`
+If it fails, try: `Server=localhost\np-master` or `Server=EIGHT8ATE\np-master`
 
 **Stop here if this fails.**
 
@@ -177,71 +142,48 @@ Write-Host "Transaction rows since Mar 1: $count" -ForegroundColor Green
 $conn.Close()
 ```
 
-**Validate:** Number > 0 (UAT shows ~18,997 total rows).
-
-If this fails:
-- Check Company name and ExtGuid — look in SSMS under Tables for `WENDYS PH$LSC`
-- The table may have a different ExtGuid on this server
+**Validate:** Number > 0 (UAT has ~18,997 total rows).
 
 **Stop here if this fails.**
 
 ---
 
-## Step 8: Test Network / DNS / API Connectivity
+## Step 8: Test Network / API Connectivity
 
-Run all three checks in order:
-
-**8a. DNS resolution:**
+**8a. DNS + TCP:**
 
 ```powershell
 Resolve-DnsName 888.insourcedata.org
-```
-
-**Validate:** Returns an IP address (Cloudflare). If it fails, DNS can't resolve our domain — ask the network team to allow DNS resolution for `888.insourcedata.org`, or try:
-
-```powershell
-# Test with Google DNS directly
-Resolve-DnsName 888.insourcedata.org -Server 8.8.8.8
-```
-
-**Stop here if DNS fails.**
-
-**8b. TCP connectivity:**
-
-```powershell
 Test-NetConnection 888.insourcedata.org -Port 443
 ```
 
-**Validate:** `TcpTestSucceeded : True`
+**Validate:** DNS returns an IP, `TcpTestSucceeded : True`
 
-If `False`:
-- Check proxy: `netsh winhttp show proxy`
-- Ask network team to whitelist outbound HTTPS (port 443) to `888.insourcedata.org`
-
-**Stop here if TCP fails.**
-
-**8c. HTTPS API call (with TLS 1.2):**
+**8b. HTTPS health check (PowerShell 7):**
 
 ```powershell
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-try {
-    $h = @{ "Authorization" = "Bearer 065a4a89d962bfcb35ffa1bf757ac0f3d1b9276098b5514c207492cf333d3217" }
-    $r = Invoke-WebRequest -Uri "https://888.insourcedata.org/api/collect/health" -Method POST -Headers $h -TimeoutSec 30
-    Write-Host "API connection: OK (Status $($r.StatusCode))" -ForegroundColor Green
-} catch {
-    Write-Host "API connection: FAILED — $_" -ForegroundColor Red
-}
+$h = @{ "Authorization" = "Bearer 065a4a89d962bfcb35ffa1bf757ac0f3d1b9276098b5514c207492cf333d3217" }
+Invoke-WebRequest -Uri "https://888.insourcedata.org/api/collect/health" -Method GET -Headers $h -TimeoutSec 30 -SkipCertificateCheck
 ```
 
-**Validate:** `API connection: OK (Status 200)`
+**Or with curl (works in both PS5.1 and PS7):**
 
-If timeout or fails:
-- If DNS and TCP passed but HTTPS fails → likely TLS issue or firewall doing SSL inspection
-- Check if there's a corporate proxy: `[System.Net.WebRequest]::DefaultWebProxy.GetProxy("https://888.insourcedata.org")`
-- Try bypassing proxy: add `-Proxy ([System.Net.GlobalProxySelection]::GetEmptyWebProxy())` to the `Invoke-WebRequest` call
-- Ask network team if there's a firewall or SSL inspection appliance blocking outbound HTTPS
+```powershell
+curl.exe -k https://888.insourcedata.org/api/collect/health -H "Authorization: Bearer 065a4a89d962bfcb35ffa1bf757ac0f3d1b9276098b5514c207492cf333d3217"
+```
 
-**All three checks (DNS, TCP, HTTPS) must pass before proceeding.**
+**Validate:** Returns `{"status":"ok"}` with Status 200.
+
+If you get an HTML page with **"FortiGuard Intrusion Prevention — Access Blocked"**:
+- The firewall is blocking `insourcedata.org` as "Unrated"
+- Ask the network/security team to whitelist `*.insourcedata.org` on the FortiGate web filter
+- **Stop here until whitelisted**
+
+If you get **"PartialChain" certificate error**:
+- Use `-SkipCertificateCheck` (PS7) or `curl.exe -k`
+- The sync script handles this automatically — it's only a problem for manual tests
+
+**Stop here if this fails.**
 
 ---
 
@@ -262,7 +204,7 @@ powershell -ExecutionPolicy Bypass -File .\cxs-collector.ps1
 
 **If no data:**
 ```
-No new data since 2026-03-30 — skipping POST
+No new data since 2026-04-01 — skipping POST
 ```
 Delete the state file to reset and retry:
 ```powershell
@@ -275,16 +217,14 @@ Then re-run the script.
 ## Step 10: Verify Data Arrived on CXS Side
 
 ```powershell
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $h = @{ "Authorization" = "Bearer 065a4a89d962bfcb35ffa1bf757ac0f3d1b9276098b5514c207492cf333d3217" }
-$s = Invoke-RestMethod -Uri "https://888.insourcedata.org/api/collect/status" -Method GET -Headers $h
-Write-Host "Queued: $($s.queued)  Processed: $($s.processed)  Failed: $($s.failed)" -ForegroundColor Cyan
+Invoke-RestMethod -Uri "https://888.insourcedata.org/api/collect/status" -Method GET -Headers $h -SkipCertificateCheck
 ```
 
 **Validate:**
-- [ ] `Processed` increased by 1
-- [ ] `Failed` did NOT increase
-- [ ] `Queued` is 0
+- [ ] `processed` increased by 1
+- [ ] `failed` did NOT increase
+- [ ] `queued` is 0
 
 Also check the sync state file:
 
@@ -292,16 +232,9 @@ Also check the sync state file:
 Get-Content C:\CXS\last-sync.json
 ```
 
-**Validate:** `lastSyncDate` shows today's date:
-```json
-{
-  "lastSyncDate": "2026-04-06",
-  "lastSyncTime": "2026-04-06 ...",
-  "storeCode": "DK003"
-}
-```
+**Validate:** `lastSyncDate` shows today's date and `storeCode` is `DK003`.
 
-If `Failed` increased, notify Arshath with the store code and timestamp.
+If `failed` increased, notify Arshath with the store code and timestamp.
 
 ---
 
@@ -314,12 +247,11 @@ SELECT COUNT(*) as txn_count,
        SUM([Net Amount]) as total_net
 FROM [WENDYS PH$LSC Transaction Header$5ecfc871-5d82-43f1-9c54-59685e82318d]
 WHERE [Transaction Type] = 2
-AND [Date] > '2026-03-30'
+AND [Date] > '2026-04-01'
 ```
 
 **Validate:**
-- [ ] `txn_count` matches the `headers: N rows` from Step 9 output
-- [ ] `total_net` approximately matches what the CXS dashboard shows
+- [ ] `txn_count` approximately matches the `headers: N rows` from Step 9
 - [ ] If counts differ significantly (>5%), notify Arshath with both numbers
 
 ---
@@ -353,14 +285,6 @@ if ($task) {
 } else {
     Write-Host "ERROR: Scheduled task not found!" -ForegroundColor Red
 }
-```
-
-Expected:
-```
-Task Name:  CXS Daily Sync
-State:      Ready
-Trigger:    2026-04-06T02:00:00
-Run As:     SYSTEM
 ```
 
 - [ ] State is `Ready`
@@ -399,7 +323,26 @@ Get-ScheduledTask -TaskName "CXS Daily Sync" | Get-ScheduledTaskInfo | Select-Ob
 - `LastTaskResult` of `0` = success
 - Any other value = failure (check `C:\CXS\logs\sync.log`)
 
-Also verify on the CXS side using the status endpoint (see Step 10).
+---
+
+## Known Issues
+
+### FortiGate Firewall Blocking
+
+888 store servers use FortiGate firewalls that block "Unrated" domains. `insourcedata.org` must be whitelisted before the script can reach the API. Symptoms:
+
+- `curl.exe` returns HTML with "FortiGuard Intrusion Prevention — Access Blocked"
+- `Invoke-WebRequest` times out or returns HTML instead of JSON
+
+**Fix:** Ask the 888 network/security team to whitelist `*.insourcedata.org` on the FortiGate web filter.
+
+### Certificate PartialChain Error
+
+Windows Servers may be missing Cloudflare's root CA certificates. Symptoms:
+
+- `Invoke-WebRequest` fails with "PartialChain" error
+
+**Fix:** The sync script handles this automatically with `TrustAllCertsPolicy`. For manual tests, use `-SkipCertificateCheck` (PS7) or `curl.exe -k`.
 
 ---
 
@@ -407,15 +350,14 @@ Also verify on the CXS side using the status endpoint (see Step 10).
 
 | Symptom | Likely Cause | Fix |
 |---------|-------------|-----|
+| FortiGuard "Access Blocked" HTML | Firewall blocking unrated domain | Whitelist `*.insourcedata.org` on FortiGate |
+| `PartialChain` certificate error | Missing Cloudflare root CA | Script handles automatically; manual tests use `-SkipCertificateCheck` |
 | `ERROR: ApiUrl or ApiKey is missing` | Config not updated | Edit `$Config` in `cxs-collector.ps1` (Step 5) |
 | `ERROR querying headers` | SQL Server not reachable | Check SQL Server service, verify instance name and database |
 | `ERROR posting data` / timeout | Can't reach CXS API | Run Step 8 diagnostics (DNS → TCP → HTTPS) |
-| DNS fails (`Resolve-DnsName`) | Internal DNS can't resolve domain | Try `Resolve-DnsName 888.insourcedata.org -Server 8.8.8.8` or ask network team |
-| TCP passes but HTTPS times out | TLS issue or SSL inspection | Ensure TLS 1.2 is forced, check for corporate proxy/firewall |
 | `No new data since ...` | Date range is empty | Delete `C:\CXS\last-sync.json` to reset |
 | Script runs but 0 rows | Wrong database or table names | Verify in SSMS — check Company name and ExtGuid |
-| `Unauthorized` (401) | API key mismatch | Verify the API key in `$Config` matches the one in this guide |
-| Scheduled task not running | Task disabled or SYSTEM can't access SQL | Check Task Scheduler, ensure SQL allows Windows Auth for SYSTEM |
+| `Unauthorized` (401) | API key mismatch | Verify the API key matches the one in this guide |
 | `processed` count didn't increase | Collector accepted but processor failed | Notify Arshath — server-side processing issue |
 
 ---
@@ -432,8 +374,8 @@ After setup, the store server should have:
 
 ```
 C:\CXS\
-├── cxs-collector.ps1          # Main sync script
-├── install-cxs-collector.ps1  # Installer (run once)
+├── cxs-collector.ps1          # Main sync script (pre-configured for this store)
+├── install-cxs-collector.ps1  # Installer for scheduled task (optional)
 ├── last-sync.json             # Tracks last successful sync date
 └── logs\
     └── sync.log               # Sync logs
