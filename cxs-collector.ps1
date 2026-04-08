@@ -104,8 +104,8 @@ function Get-LastSyncDate {
         $state = Get-Content $Config.StateFile | ConvertFrom-Json
         return $state.lastSyncDate
     }
-    # Default: 7 days ago
-    return (Get-Date).AddDays(-7).ToString("yyyy-MM-dd")
+    # Default: 1 year ago (captures all available data on first run)
+    return (Get-Date).AddDays(-365).ToString("yyyy-MM-dd")
 }
 
 function Set-LastSyncDate {
