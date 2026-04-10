@@ -11,11 +11,34 @@
 
     No VPN, no firewall changes, no inbound ports. Outbound HTTPS only.
 
+.PARAMETER StartDate
+    Optional. Override the sync start date (inclusive lower bound, exclusive).
+    Format: yyyy-MM-dd. If omitted, uses last-sync.json or defaults to 365 days ago.
+    Useful for testing a specific date range without touching the state file.
+
+.PARAMETER EndDate
+    Optional. Override the sync end date (inclusive upper bound).
+    Format: yyyy-MM-dd. If omitted, no upper bound (queries all data after StartDate).
+    Useful for testing a small window to keep payloads under the API size limit.
+
+.EXAMPLE
+    # Normal automated run (uses state file)
+    .\cxs-collector.ps1
+
+.EXAMPLE
+    # Test run — pull 2 days of data only, do NOT update state file
+    .\cxs-collector.ps1 -StartDate "2025-12-31" -EndDate "2026-01-02"
+
 .NOTES
     Language: PowerShell (pre-installed on all Windows Server)
     Auth: Windows Authentication to localhost SQL Server
     Transport: HTTPS POST to CXS collector API
 #>
+
+param(
+    [string]$StartDate = "",
+    [string]$EndDate = ""
+)
 
 # ─── Configuration ──────────────────────────────────────────────────────────────
 # These are set per-store during installation
@@ -134,9 +157,21 @@ function Invoke-Sync {
     Write-Log "Store: $($Config.StoreCode) ($($Config.OracleCode))"
     Write-Log "Server: $($Config.SqlServer) / $($Config.Database)"
 
-    $lastSync = Get-LastSyncDate
+    # Determine date range — CLI params override state file
+    if ($StartDate) {
+        $lastSync = $StartDate
+        Write-Log "StartDate override: $lastSync"
+    } else {
+        $lastSync = Get-LastSyncDate
+    }
+
     $today = (Get-Date).ToString("yyyy-MM-dd")
-    Write-Log "Sync range: $lastSync to $today"
+    if ($EndDate) {
+        Write-Log "EndDate override: $EndDate (state file will NOT be updated)"
+        Write-Log "Sync range: $lastSync to $EndDate"
+    } else {
+        Write-Log "Sync range: $lastSync to $today"
+    }
 
     # Build connection string — Windows Authentication, no password
     $connString = "Server=$($Config.SqlServer);Database=$($Config.Database);Integrated Security=True;TrustServerCertificate=True;"
@@ -153,7 +188,11 @@ function Invoke-Sync {
 
     foreach ($table in $Tables) {
         $fullName = Get-TableFullName -TableName $table.Name
-        $query = "SELECT * FROM $fullName WHERE [Date] > '$lastSync'"
+        if ($EndDate) {
+            $query = "SELECT * FROM $fullName WHERE [Date] > '$lastSync' AND [Date] <= '$EndDate'"
+        } else {
+            $query = "SELECT * FROM $fullName WHERE [Date] > '$lastSync'"
+        }
 
         Write-Log "  Querying $($table.Alias) ..."
 
@@ -226,8 +265,14 @@ function Invoke-Sync {
         $response = Invoke-RestMethod -Uri $Config.ApiUrl -Method POST -Body $json -Headers $headers -TimeoutSec 120
 
         Write-Log "POST successful: $($response.status)"
-        Set-LastSyncDate -Date $today
-        Write-Log "Last sync updated to: $today"
+
+        # Only update state file on normal runs — skip for bounded test runs
+        if (-not $EndDate) {
+            Set-LastSyncDate -Date $today
+            Write-Log "Last sync updated to: $today"
+        } else {
+            Write-Log "Test run ($EndDate bound) — state file NOT updated"
+        }
     }
     catch {
         Write-Log "ERROR posting data: $_"
