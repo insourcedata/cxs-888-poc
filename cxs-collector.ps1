@@ -4,34 +4,45 @@
     CXS Store Data Collector — queries local LS Central SQL Server and sends data to CXS dashboard.
 
 .DESCRIPTION
-    This script runs on each Wendy's store server as a Windows Scheduled Task.
-    It connects to the local SQL Server using Windows Authentication (localhost),
-    runs the same queries 888 runs manually in SSMS, and POSTs the results
-    as JSON to the CXS collector API over HTTPS.
+    Runs on each Wendy's store server. Queries the local LS Central SQL Server
+    (Windows Auth) and POSTs the results as JSON to the CXS collector API.
 
     No VPN, no firewall changes, no inbound ports. Outbound HTTPS only.
 
+    TWO MODES:
+
+    1. DAILY SYNC (default, no args) — for the Windows Scheduled Task.
+       Queries exactly one day's worth of data: yesterday.
+       One POST. No state file — yesterday is always deterministic.
+
+    2. BACKFILL (-StartDate -EndDate) — for manual backfills / gap recovery.
+       Walks the range one day at a time, one POST per day. If a day fails,
+       the script stops and logs which day failed. Safe to re-run — the
+       collector's processor is idempotent (same data won't be inserted twice).
+
 .PARAMETER StartDate
-    Optional. Override the sync start date (inclusive lower bound, exclusive).
-    Format: yyyy-MM-dd. If omitted, uses last-sync.json or defaults to 365 days ago.
-    Useful for testing a specific date range without touching the state file.
+    Optional. Backfill mode lower bound (inclusive). Format: yyyy-MM-dd.
+    Must be supplied together with -EndDate.
 
 .PARAMETER EndDate
-    Optional. Override the sync end date (inclusive upper bound).
-    Format: yyyy-MM-dd. If omitted, no upper bound (queries all data after StartDate).
-    Useful for testing a small window to keep payloads under the API size limit.
+    Optional. Backfill mode upper bound (inclusive). Format: yyyy-MM-dd.
+    Must be supplied together with -StartDate.
 
 .EXAMPLE
-    # Normal automated run (uses state file)
+    # Daily sync — runs by scheduled task at 02:00, queries yesterday only
     .\cxs-collector.ps1
 
 .EXAMPLE
-    # Test run — pull 2 days of data only, do NOT update state file
-    .\cxs-collector.ps1 -StartDate "2025-12-31" -EndDate "2026-01-02"
+    # Backfill January 2026 one day at a time
+    .\cxs-collector.ps1 -StartDate "2026-01-01" -EndDate "2026-01-31"
+
+.EXAMPLE
+    # Re-sync a single day (e.g. after a failed overnight run)
+    .\cxs-collector.ps1 -StartDate "2026-04-09" -EndDate "2026-04-09"
 
 .NOTES
-    Language: PowerShell (pre-installed on all Windows Server)
-    Auth: Windows Authentication to localhost SQL Server
+    Language: PowerShell 5.1 (pre-installed on all Windows Server)
+    Auth:     Windows Authentication to local SQL Server
     Transport: HTTPS POST to CXS collector API
 #>
 
@@ -59,9 +70,6 @@ $Config = @{
     # Store identifier
     StoreCode  = "DK003"                     # FTI Complex (UAT)
     OracleCode = "4058"                      # FTI Complex (UAT)
-
-    # Sync state file — tracks last successful sync date
-    StateFile  = "C:\CXS\last-sync.json"
 
     # Log file
     LogFile    = "C:\CXS\logs\sync.log"
@@ -94,6 +102,13 @@ if (-not $Config.ApiUrl -or -not $Config.ApiKey -or $Config.ApiUrl -match "CHANG
     exit 1
 }
 
+# Validate param pairing — backfill needs both or neither
+if (($StartDate -and -not $EndDate) -or ($EndDate -and -not $StartDate)) {
+    Write-Host "ERROR: -StartDate and -EndDate must be supplied together (backfill mode)." -ForegroundColor Red
+    Write-Host "       Omit both for daily sync mode (queries yesterday)." -ForegroundColor Red
+    exit 1
+}
+
 # ─── Tables to extract ──────────────────────────────────────────────────────────
 
 $Tables = @(
@@ -114,7 +129,6 @@ function Write-Log {
     $line = "[$timestamp] $Message"
     Write-Host $line
 
-    # Ensure log directory exists
     $logDir = Split-Path $Config.LogFile -Parent
     if (-not (Test-Path $logDir)) {
         New-Item -ItemType Directory -Path $logDir -Force | Out-Null
@@ -122,65 +136,24 @@ function Write-Log {
     Add-Content -Path $Config.LogFile -Value $line
 }
 
-function Get-LastSyncDate {
-    if (Test-Path $Config.StateFile) {
-        $state = Get-Content $Config.StateFile | ConvertFrom-Json
-        return $state.lastSyncDate
-    }
-    # Default: 1 year ago (captures all available data on first run)
-    return (Get-Date).AddDays(-365).ToString("yyyy-MM-dd")
-}
-
-function Set-LastSyncDate {
-    param([string]$Date)
-    $state = @{
-        lastSyncDate = $Date
-        lastSyncTime = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-        storeCode    = $Config.StoreCode
-    }
-    $stateDir = Split-Path $Config.StateFile -Parent
-    if (-not (Test-Path $stateDir)) {
-        New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
-    }
-    $state | ConvertTo-Json | Set-Content $Config.StateFile
-}
-
 function Get-TableFullName {
     param([string]$TableName)
     return "[$($Config.Company)`$LSC $TableName`$$($Config.ExtGuid)]"
 }
 
-# ─── Main ───────────────────────────────────────────────────────────────────────
+# ─── Per-day sync ───────────────────────────────────────────────────────────────
+# Queries all three LS tables for a single date, builds the payload, POSTs.
+# Returns $true on success (HTTP 200), $false on any failure.
 
-function Invoke-Sync {
-    Write-Log "=== CXS Sync Start ==="
-    Write-Log "Store: $($Config.StoreCode) ($($Config.OracleCode))"
-    Write-Log "Server: $($Config.SqlServer) / $($Config.Database)"
+function Invoke-DaySync {
+    param([string]$Day)
 
-    # Determine date range — CLI params override state file
-    if ($StartDate) {
-        $lastSync = $StartDate
-        Write-Log "StartDate override: $lastSync"
-    } else {
-        $lastSync = Get-LastSyncDate
-    }
-
-    $today = (Get-Date).ToString("yyyy-MM-dd")
-    if ($EndDate) {
-        Write-Log "EndDate override: $EndDate (state file will NOT be updated)"
-        Write-Log "Sync range: $lastSync to $EndDate"
-    } else {
-        Write-Log "Sync range: $lastSync to $today"
-    }
-
-    # Build connection string — Windows Authentication, no password
     $connString = "Server=$($Config.SqlServer);Database=$($Config.Database);Integrated Security=True;TrustServerCertificate=True;"
 
     $payload = @{
         storeCode  = $Config.StoreCode
         oracleCode = $Config.OracleCode
-        syncDate   = $today
-        lastSync   = $lastSync
+        syncDate   = $Day
         tables     = @{}
     }
 
@@ -188,13 +161,7 @@ function Invoke-Sync {
 
     foreach ($table in $Tables) {
         $fullName = Get-TableFullName -TableName $table.Name
-        if ($EndDate) {
-            $query = "SELECT * FROM $fullName WHERE [Date] > '$lastSync' AND [Date] <= '$EndDate'"
-        } else {
-            $query = "SELECT * FROM $fullName WHERE [Date] > '$lastSync'"
-        }
-
-        Write-Log "  Querying $($table.Alias) ..."
+        $query = "SELECT * FROM $fullName WHERE [Date] = '$Day'"
 
         try {
             $conn = New-Object System.Data.SqlClient.SqlConnection($connString)
@@ -223,7 +190,7 @@ function Invoke-Sync {
                         $rowHash[$col.ColumnName] = $val.ToString("yyyy-MM-dd HH:mm:ss")
                     }
                     elseif ($val -is [byte[]]) {
-                        # Skip binary columns (e.g. timestamp)
+                        # Skip binary columns (e.g. rowversion/timestamp)
                         $rowHash[$col.ColumnName] = $null
                     }
                     else {
@@ -235,24 +202,20 @@ function Invoke-Sync {
 
             $payload.tables[$table.Alias] = $rows
             $totalRows += $rows.Count
-            Write-Log "    $($table.Alias): $($rows.Count) rows"
         }
         catch {
-            Write-Log "    ERROR querying $($table.Alias): $_"
-            $payload.tables[$table.Alias] = @()
+            Write-Log "  [$Day] ERROR querying $($table.Alias): $_"
+            return $false
         }
     }
 
-    Write-Log "Total rows: $totalRows"
-
     if ($totalRows -eq 0) {
-        Write-Log "No new data since $lastSync — skipping POST"
-        Write-Log "=== CXS Sync Complete (no data) ==="
-        return
+        Write-Log "  [$Day] no rows — skipping POST"
+        return $true  # empty day is a "success" — don't want to block the backfill loop
     }
 
-    # POST to CXS collector
-    Write-Log "Sending to $($Config.ApiUrl) ..."
+    Write-Log ("  [$Day] {0} headers, {1} sales, {2} payments — POSTing…" -f `
+        $payload.tables.headers.Count, $payload.tables.sales.Count, $payload.tables.payments.Count)
 
     try {
         $json = $payload | ConvertTo-Json -Depth 10 -Compress
@@ -264,22 +227,74 @@ function Invoke-Sync {
 
         $response = Invoke-RestMethod -Uri $Config.ApiUrl -Method POST -Body $json -Headers $headers -TimeoutSec 120
 
-        Write-Log "POST successful: $($response.status)"
-
-        # Only update state file on normal runs — skip for bounded test runs
-        if (-not $EndDate) {
-            Set-LastSyncDate -Date $today
-            Write-Log "Last sync updated to: $today"
-        } else {
-            Write-Log "Test run ($EndDate bound) — state file NOT updated"
-        }
+        Write-Log "  [$Day] POST ok: $($response.status)"
+        return $true
     }
     catch {
-        Write-Log "ERROR posting data: $_"
-        Write-Log "Data NOT sent — will retry on next run"
+        Write-Log "  [$Day] ERROR posting: $_"
+        return $false
+    }
+}
+
+# ─── Main ───────────────────────────────────────────────────────────────────────
+
+function Invoke-Sync {
+    Write-Log "=== CXS Sync Start ==="
+    Write-Log "Store:  $($Config.StoreCode) ($($Config.OracleCode))"
+    Write-Log "Server: $($Config.SqlServer) / $($Config.Database)"
+
+    # Figure out which days to sync
+    if ($StartDate) {
+        # Backfill mode
+        try {
+            $start = [DateTime]::ParseExact($StartDate, "yyyy-MM-dd", $null)
+            $end   = [DateTime]::ParseExact($EndDate,   "yyyy-MM-dd", $null)
+        }
+        catch {
+            Write-Log "ERROR: -StartDate / -EndDate must be in yyyy-MM-dd format."
+            return
+        }
+
+        if ($end -lt $start) {
+            Write-Log "ERROR: -EndDate ($EndDate) is before -StartDate ($StartDate)."
+            return
+        }
+
+        $days = @()
+        $cursor = $start
+        while ($cursor -le $end) {
+            $days += $cursor.ToString("yyyy-MM-dd")
+            $cursor = $cursor.AddDays(1)
+        }
+
+        Write-Log "Mode: BACKFILL — $($days.Count) day(s) from $StartDate to $EndDate"
+    }
+    else {
+        # Daily sync mode — yesterday only
+        $yesterday = (Get-Date).Date.AddDays(-1).ToString("yyyy-MM-dd")
+        $days = @($yesterday)
+        Write-Log "Mode: DAILY — syncing yesterday ($yesterday)"
     }
 
-    Write-Log "=== CXS Sync Complete ==="
+    # Walk days in order, stop on first failure
+    $succeeded = 0
+    $failed    = $null
+    foreach ($day in $days) {
+        $ok = Invoke-DaySync -Day $day
+        if (-not $ok) {
+            $failed = $day
+            break
+        }
+        $succeeded++
+    }
+
+    if ($failed) {
+        Write-Log "=== CXS Sync FAILED on $failed (completed $succeeded/$($days.Count) days) ==="
+        Write-Log "Re-run with: .\cxs-collector.ps1 -StartDate `"$failed`" -EndDate `"$($days[-1])`""
+        exit 1
+    }
+
+    Write-Log "=== CXS Sync Complete — $succeeded/$($days.Count) days ok ==="
 }
 
 # Run

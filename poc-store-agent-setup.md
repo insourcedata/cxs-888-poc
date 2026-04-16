@@ -1,11 +1,14 @@
-# POC Store Agent Setup — UAT Server
+# POC Store Agent Setup Guide
 
-> Step-by-step guide for installing and testing the CXS data collector script on a Wendy's store server.
+> Step-by-step guide for installing and testing the CXS data collector on a Wendy's store server.
 > This is run by 888 IT via RDP into the store server.
+> Last updated: 16 Apr 2026.
 
 ## What This Does
 
-A PowerShell script runs on the store server, queries the local LS Central SQL Server for transaction data, and sends it as JSON over HTTPS to the CXS collector API. No VPN, no inbound ports — outbound HTTPS only.
+A PowerShell script runs on the store server, queries the local LS Central SQL Server for yesterday's transaction data, and sends it as JSON over HTTPS to the CXS collector API. A Windows Scheduled Task runs the script automatically at 02:00 every night.
+
+No VPN, no firewall changes, no inbound ports — outbound HTTPS only.
 
 ---
 
@@ -23,12 +26,14 @@ Before starting, confirm:
 
 **Store config reference:**
 
-| Store | SqlServer | Database | StoreCode | OracleCode |
-|-------|-----------|----------|-----------|------------|
-| FTI Complex (UAT) | `ITLAB-SVR-AZ\np-master` | NEWPOS | DK003 | 4058 |
-| SM Marilao | localhost | WSMOD8 | S059 | 4020 |
-| Cubao | TBD | TBD | S002 | TBD |
-| SM Clark | TBD | TBD | S085 | TBD |
+| Store | SqlServer | Database | StoreCode | OracleCode | Status |
+|-------|-----------|----------|-----------|------------|--------|
+| FTI Complex (UAT) | `ITLAB-SVR-AZ\np-master` | NEWPOS | DK003 | 4058 | Verified |
+| SM Marilao | `localhost` | WSMOD8 | S059 | 4020 | Pending SQL reachability test |
+| Cubao | TBD | TBD | S002 | TBD | Pending 888 IT info |
+| SM Clark | TBD | TBD | S085 | TBD | Pending 888 IT info |
+
+> **Note:** The `install-cxs-collector.ps1` script handles all config — it copies `cxs-collector.ps1` to `C:\CXS\`, rewrites the `$Config` block with the store-specific values you pass as parameters, and registers the scheduled task. No manual editing of the script needed.
 
 ---
 
@@ -74,8 +79,9 @@ You can copy via:
 - Email attachment (zip first — `.ps1` may be blocked)
 - Teams / shared folder / USB drive
 
-> **Note:** The script provided already has the UAT config (ITLAB-SVR-AZ\np-master, NEWPOS, DK003) pre-filled.
-> No editing needed for UAT. For other stores, edit the `$Config` block at the top.
+> **Option A (recommended):** Use `install-cxs-collector.ps1` (Step 12) — it copies the script, sets all config values, and registers the scheduled task in one go. Skip Steps 4-5 if using the installer.
+>
+> **Option B (manual):** Copy `cxs-collector.ps1` directly and edit the `$Config` block at the top for each store. The repo version has UAT config (DK003) pre-filled.
 
 **Validate:**
 
@@ -202,15 +208,14 @@ powershell -ExecutionPolicy Bypass -File .\cxs-collector.ps1
 - [ ] `=== CXS Sync Complete ===`
 - [ ] No `ERROR` lines in the output
 
-**If no data:**
-```
-No new data since 2026-04-01 — skipping POST
-```
-Delete the state file to reset and retry:
+**If no data (e.g. "no rows — skipping POST"):**
+
+The daily mode queries yesterday only. If yesterday had no transactions, that's expected. To test with a known-good date, use backfill mode:
+
 ```powershell
-Remove-Item C:\CXS\last-sync.json -ErrorAction SilentlyContinue
+# Sync a specific date range (one POST per day)
+powershell -ExecutionPolicy Bypass -File .\cxs-collector.ps1 -StartDate "2025-12-31" -EndDate "2026-01-01"
 ```
-Then re-run the script.
 
 ---
 
@@ -225,14 +230,6 @@ Invoke-RestMethod -Uri "https://888.insourcedata.org/api/collect/status" -Method
 - [ ] `processed` increased by 1
 - [ ] `failed` did NOT increase
 - [ ] `queued` is 0
-
-Also check the sync state file:
-
-```powershell
-Get-Content C:\CXS\last-sync.json
-```
-
-**Validate:** `lastSyncDate` shows today's date and `storeCode` is `DK003`.
 
 If `failed` increased, notify Arshath with the store code and timestamp.
 
@@ -295,26 +292,18 @@ if ($task) {
 
 ## Step 13: Verify Automated Run (Next Day)
 
-The morning after installation:
-
-```powershell
-Get-Content C:\CXS\last-sync.json
-```
-
-**Validate:** `lastSyncDate` should be today's date (updated by the 2 AM run).
-
-Check log for errors:
+The morning after installation, check the log for the 02:00 run:
 
 ```powershell
 Get-Content C:\CXS\logs\sync.log -Tail 30
 ```
 
 **Validate:**
-- [ ] Log shows `=== CXS Sync Start ===` and `=== CXS Sync Complete ===` with 2 AM timestamp
+- [ ] Log shows `=== CXS Sync Start ===` and `=== CXS Sync Complete ===` with ~02:00 timestamp
 - [ ] No `ERROR` lines between start and complete
-- [ ] `POST successful: accepted` is present
+- [ ] `POST ok: accepted` is present
 
-If the log doesn't show a 2 AM run:
+If the log doesn't show a 02:00 run:
 
 ```powershell
 Get-ScheduledTask -TaskName "CXS Daily Sync" | Get-ScheduledTaskInfo | Select-Object LastRunTime, LastTaskResult
@@ -355,7 +344,7 @@ Windows Servers may be missing Cloudflare's root CA certificates. Symptoms:
 | `ERROR: ApiUrl or ApiKey is missing` | Config not updated | Edit `$Config` in `cxs-collector.ps1` (Step 5) |
 | `ERROR querying headers` | SQL Server not reachable | Check SQL Server service, verify instance name and database |
 | `ERROR posting data` / timeout | Can't reach CXS API | Run Step 8 diagnostics (DNS → TCP → HTTPS) |
-| `No new data since ...` | Date range is empty | Delete `C:\CXS\last-sync.json` to reset |
+| `no rows — skipping POST` | Yesterday had no transactions | Use `-StartDate`/`-EndDate` to test a known-good date |
 | Script runs but 0 rows | Wrong database or table names | Verify in SSMS — check Company name and ExtGuid |
 | `Unauthorized` (401) | API key mismatch | Verify the API key matches the one in this guide |
 | `processed` count didn't increase | Collector accepted but processor failed | Notify Arshath — server-side processing issue |
@@ -375,8 +364,83 @@ After setup, the store server should have:
 ```
 C:\CXS\
 ├── cxs-collector.ps1          # Main sync script (pre-configured for this store)
-├── install-cxs-collector.ps1  # Installer for scheduled task (optional)
-├── last-sync.json             # Tracks last successful sync date
+├── install-cxs-collector.ps1  # Installer for scheduled task (run once during setup)
 └── logs\
-    └── sync.log               # Sync logs
+    └── sync.log               # Sync logs (appended to daily)
 ```
+
+---
+
+## Daily Sync — How It Works
+
+Once the scheduled task is installed, the store server automatically syncs data every night.
+
+### What happens at 02:00
+
+1. Windows Task Scheduler runs `cxs-collector.ps1` as SYSTEM
+2. The script queries LS Central for **yesterday's** transactions (headers + sales + payments)
+3. Builds a JSON payload and POSTs it to `https://888.insourcedata.org/api/collect`
+4. The CXS collector receives, validates, and inserts the data into PostgreSQL
+5. If the transaction already exists (re-run), it's skipped — no duplicates
+
+The script is **stateless** — it always queries yesterday. No state files, no cursors, no "how far back" logic.
+
+### Monitoring the daily sync
+
+**On the store server** (RDP in, check the log):
+
+```powershell
+# Last 30 lines of the log
+Get-Content C:\CXS\logs\sync.log -Tail 30
+
+# Check last run time and result
+Get-ScheduledTask -TaskName "CXS Daily Sync" | Get-ScheduledTaskInfo | Select-Object LastRunTime, LastTaskResult
+```
+
+- `LastTaskResult = 0` means success
+- Any other value means failure — check the log for `ERROR` lines
+
+**On the CXS dashboard** (web browser):
+
+1. Sign in to `https://888.insourcedata.org`
+2. Go to **Admin** (super_admin only)
+3. Check the "Latest sync per store" table — each store should show `status: ok` with a recent date
+
+### If a nightly sync fails
+
+The failed day won't be automatically retried. To fill the gap, RDP into the store and run:
+
+```powershell
+cd C:\CXS
+
+# Replay a single missed day
+powershell -ExecutionPolicy Bypass -File .\cxs-collector.ps1 -StartDate "2026-04-14" -EndDate "2026-04-14"
+
+# Replay a range of missed days
+powershell -ExecutionPolicy Bypass -File .\cxs-collector.ps1 -StartDate "2026-04-14" -EndDate "2026-04-16"
+```
+
+Safe to re-run even if the day partially succeeded — duplicate transactions are skipped automatically.
+
+### If you need to backfill historical data
+
+For a new store that needs months of historical data loaded:
+
+```powershell
+cd C:\CXS
+
+# Backfill all of Q1 2026 (walks day by day, one POST per day)
+powershell -ExecutionPolicy Bypass -File .\cxs-collector.ps1 -StartDate "2026-01-01" -EndDate "2026-03-31"
+```
+
+If any day fails mid-backfill, the script stops and prints the exact command to resume from the failed day.
+
+### Common issues with automated runs
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| No 02:00 entry in log | Task didn't fire | Check `Get-ScheduledTask` state is `Ready` |
+| `ERROR posting` in log | Network/API issue | Run Step 8 diagnostics (DNS → TCP → HTTPS) |
+| `ERROR querying` in log | SQL Server down or unreachable | Check SQL Server service is running |
+| Log shows success but no data on dashboard | Empty day (no transactions yesterday) | Normal — check a day you know has data |
+| Task shows `LastTaskResult = 1` | Script exited with error | Read the full log: `Get-Content C:\CXS\logs\sync.log` |
