@@ -28,11 +28,14 @@
 .PARAMETER OracleCode
     The store Oracle code (e.g. 4020, 4058).
 
+.PARAMETER SyncTime
+    The daily sync time in HH:mmAM/PM format (e.g. "2:00AM", "3:30AM"). Defaults to "2:00AM".
+
 .EXAMPLE
     .\install-cxs-collector.ps1 -ApiUrl "https://888.insourcedata.org/api/collect" -ApiKey "key123" -SqlServer "localhost" -Database "WSMOD8" -StoreCode "S059" -OracleCode "4020"
 
 .EXAMPLE
-    .\install-cxs-collector.ps1 -ApiUrl "https://888.insourcedata.org/api/collect" -ApiKey "key123" -SqlServer "ITLAB-SVR-AZ\np-master" -Database "NEWPOS" -StoreCode "DK003" -OracleCode "4058"
+    .\install-cxs-collector.ps1 -ApiUrl "https://888.insourcedata.org/api/collect" -ApiKey "key123" -SqlServer "ITLAB-SVR-AZ\np-master" -Database "NEWPOS" -StoreCode "DK003" -OracleCode "4058" -SyncTime "3:00AM"
 #>
 
 param(
@@ -52,7 +55,10 @@ param(
     [string]$StoreCode,
 
     [Parameter(Mandatory=$true)]
-    [string]$OracleCode
+    [string]$OracleCode,
+
+    [Parameter(Mandatory=$false)]
+    [string]$SyncTime = "2:00AM"
 )
 
 $InstallDir = "C:\CXS"
@@ -170,8 +176,8 @@ $action = New-ScheduledTaskAction `
     -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$destScript`"" `
     -WorkingDirectory $InstallDir
 
-# Daily at 2:00 AM
-$trigger = New-ScheduledTaskTrigger -Daily -At "2:00AM"
+# Daily at the configured time (default 2:00 AM)
+$trigger = New-ScheduledTaskTrigger -Daily -At $SyncTime
 
 # Run as SYSTEM so it works even when no one is logged in
 $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
@@ -191,14 +197,14 @@ Register-ScheduledTask `
     -Settings $settings `
     -Description "CXS Dashboard — daily data sync to collector API" | Out-Null
 
-Write-Host "  [OK] Scheduled Task created: $TaskName — 2:00 AM daily" -ForegroundColor Green
+Write-Host "  [OK] Scheduled Task created: $TaskName — daily at $SyncTime" -ForegroundColor Green
 
 # Done
 Write-Host ""
 Write-Host "=== Installation Complete ===" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Files installed to: $InstallDir"
-Write-Host "Scheduled task: '$TaskName' (daily at 2:00 AM)"
+Write-Host "Scheduled task: '$TaskName' (daily at $SyncTime)"
 Write-Host "Logs: $InstallDir\logs\sync.log"
 Write-Host ""
 Write-Host "To run a sync manually:" -ForegroundColor Yellow

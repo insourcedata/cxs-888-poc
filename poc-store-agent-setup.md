@@ -195,27 +195,38 @@ If you get **"PartialChain" certificate error**:
 
 ## Step 9: Run the First Sync
 
+The script has two modes:
+
+**Mode 1 — Daily (no arguments).** Queries yesterday only. This is what the scheduled task runs every night.
+
 ```powershell
 cd C:\CXS
 powershell -ExecutionPolicy Bypass -File .\cxs-collector.ps1
 ```
 
+**Mode 2 — Backfill (`-StartDate` / `-EndDate`).** Walks a date range one day at a time, one POST per day. Use this for historical data or to re-sync a specific date.
+
+```powershell
+cd C:\CXS
+
+# Sync a single specific date
+powershell -ExecutionPolicy Bypass -File .\cxs-collector.ps1 -StartDate "2026-04-10" -EndDate "2026-04-10"
+
+# Sync a range (e.g. all of March)
+powershell -ExecutionPolicy Bypass -File .\cxs-collector.ps1 -StartDate "2026-03-01" -EndDate "2026-03-31"
+```
+
+Both modes are **idempotent** — safe to re-run. If the data already exists, duplicates are skipped.
+
 **Validate — all must be true:**
 - [ ] `headers: XX rows` — number > 0
 - [ ] `sales: XX rows` — number > 0
 - [ ] `payments: XX rows` — number > 0
-- [ ] `POST successful: accepted`
+- [ ] `POST ok: accepted`
 - [ ] `=== CXS Sync Complete ===`
 - [ ] No `ERROR` lines in the output
 
-**If no data (e.g. "no rows — skipping POST"):**
-
-The daily mode queries yesterday only. If yesterday had no transactions, that's expected. To test with a known-good date, use backfill mode:
-
-```powershell
-# Sync a specific date range (one POST per day)
-powershell -ExecutionPolicy Bypass -File .\cxs-collector.ps1 -StartDate "2025-12-31" -EndDate "2026-01-01"
-```
+**If daily mode shows "no rows — skipping POST":** Yesterday had no transactions. Use backfill mode with a known-good date to test the pipeline end-to-end.
 
 ---
 
@@ -269,6 +280,19 @@ powershell -ExecutionPolicy Bypass -File .\install-cxs-collector.ps1 `
 ```
 
 For production stores using localhost, omit `-SqlServer` (defaults to `localhost`).
+
+To set a custom sync time (default is 02:00 AM), add `-SyncTime`:
+
+```powershell
+# Example: sync at 3:30 AM instead of 2:00 AM
+powershell -ExecutionPolicy Bypass -File .\install-cxs-collector.ps1 `
+    -ApiUrl "https://888.insourcedata.org/api/collect" `
+    -ApiKey "065a4a89d962bfcb35ffa1bf757ac0f3d1b9276098b5514c207492cf333d3217" `
+    -Database "WSMOD8" `
+    -StoreCode "S059" `
+    -OracleCode "4020" `
+    -SyncTime "3:30AM"
+```
 
 **Validate:**
 
