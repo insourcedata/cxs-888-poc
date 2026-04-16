@@ -294,15 +294,19 @@ powershell -ExecutionPolicy Bypass -File .\install-cxs-collector.ps1 `
     -SyncTime "3:30AM"
 ```
 
-**Validate:**
+**Validate (PowerShell):**
 
 ```powershell
 $task = Get-ScheduledTask -TaskName "CXS Daily Sync" -ErrorAction SilentlyContinue
 if ($task) {
-    Write-Host "Task Name:  $($task.TaskName)" -ForegroundColor Green
-    Write-Host "State:      $($task.State)" -ForegroundColor Green
-    Write-Host "Trigger:    $($task.Triggers[0].StartBoundary)" -ForegroundColor Green
-    Write-Host "Run As:     $($task.Principal.UserId)" -ForegroundColor Green
+    $info = $task | Get-ScheduledTaskInfo
+    Write-Host "Task Name:    $($task.TaskName)" -ForegroundColor Green
+    Write-Host "State:        $($task.State)" -ForegroundColor Green
+    Write-Host "Trigger:      $($task.Triggers[0].StartBoundary)" -ForegroundColor Green
+    Write-Host "Run As:       $($task.Principal.UserId)" -ForegroundColor Green
+    Write-Host "Last Run:     $($info.LastRunTime)" -ForegroundColor Green
+    Write-Host "Last Result:  $($info.LastTaskResult)" -ForegroundColor Green
+    Write-Host "Next Run:     $($info.NextRunTime)" -ForegroundColor Green
 } else {
     Write-Host "ERROR: Scheduled task not found!" -ForegroundColor Red
 }
@@ -310,7 +314,16 @@ if ($task) {
 
 - [ ] State is `Ready`
 - [ ] Run As is `SYSTEM`
-- [ ] Trigger shows 02:00 AM
+- [ ] Trigger shows the configured sync time (default 02:00)
+- [ ] Next Run shows tomorrow's date at the configured time
+
+**Validate (GUI — alternative):**
+
+1. Press `Win + R`, type `taskschd.msc`, press Enter
+2. In the left pane, click **Task Scheduler Library**
+3. Find **"CXS Daily Sync"** in the list
+4. Confirm: Status = `Ready`, Triggers = `Daily at 2:00 AM` (or your custom time), Run As User = `SYSTEM`
+5. Right-click → **Run** to trigger it manually and confirm it works
 
 ---
 
