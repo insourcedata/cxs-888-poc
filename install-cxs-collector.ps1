@@ -31,11 +31,31 @@
 .PARAMETER SyncTime
     The daily sync time in HH:mmAM/PM format (e.g. "2:00AM", "3:30AM"). Defaults to "2:00AM".
 
+.PARAMETER Brand
+    The brand for this install: "wendys" or "contis". Defaults to "wendys".
+
+.PARAMETER Company
+    The LS Central company name as it appears in the SQL table prefix
+    (e.g. "WENDYS PH", "CONTIS"). Defaults to "WENDYS PH".
+
+.PARAMETER ExtGuid
+    The LS Central table extension GUID for this installation. Defaults to
+    Wendy's UAT GUID. Pass an empty string ("") for installs that use the
+    NAV/legacy table naming format ([<Company>$<Table>]) instead of the
+    LS Central extension format ([<Company>$LSC <Table>$<GUID>]) - e.g.
+    Conti's NOC database.
+
 .EXAMPLE
+    Wendy's store (default brand/Company/ExtGuid):
     .\install-cxs-collector.ps1 -ApiUrl "https://888.insourcedata.org/api/collect" -ApiKey "key123" -SqlServer "localhost" -Database "WSMOD8" -StoreCode "S059" -OracleCode "4020"
 
 .EXAMPLE
+    Wendy's UAT (custom SQL Server, sync time):
     .\install-cxs-collector.ps1 -ApiUrl "https://888.insourcedata.org/api/collect" -ApiKey "key123" -SqlServer "ITLAB-SVR-AZ\np-master" -Database "NEWPOS" -StoreCode "DK003" -OracleCode "4058" -SyncTime "3:00AM"
+
+.EXAMPLE
+    Conti's NOC store install (NAV-format tables - pass empty ExtGuid):
+    .\install-cxs-collector.ps1 -ApiUrl "https://888.insourcedata.org/api/collect" -ApiKey "key123" -SqlServer "SSTSERVER" -Database "NOCSSTDB" -StoreCode "NOCSST" -OracleCode "5001" -Brand "contis" -Company "NOC" -ExtGuid ""
 #>
 
 param(
@@ -58,7 +78,17 @@ param(
     [string]$OracleCode,
 
     [Parameter(Mandatory=$false)]
-    [string]$SyncTime = "2:00AM"
+    [string]$SyncTime = "2:00AM",
+
+    [Parameter(Mandatory=$false)]
+    [ValidateSet("wendys", "contis")]
+    [string]$Brand = "wendys",
+
+    [Parameter(Mandatory=$false)]
+    [string]$Company = "WENDYS PH",
+
+    [Parameter(Mandatory=$false)]
+    [string]$ExtGuid = "5ecfc871-5d82-43f1-9c54-59685e82318d"
 )
 
 $InstallDir = "C:\CXS"
@@ -91,6 +121,9 @@ $scriptContent = $scriptContent -replace 'ApiUrl\s*=\s*"[^"]*"', "ApiUrl     = `
 $scriptContent = $scriptContent -replace 'ApiKey\s*=\s*"[^"]*"', "ApiKey     = `"$ApiKey`""
 $scriptContent = $scriptContent -replace 'SqlServer\s*=\s*"[^"]*"', "SqlServer  = `"$SqlServer`""
 $scriptContent = $scriptContent -replace 'Database\s*=\s*"[^"]*"', "Database   = `"$Database`""
+$scriptContent = $scriptContent -replace 'Brand\s*=\s*"[^"]*"', "Brand      = `"$Brand`""
+$scriptContent = $scriptContent -replace 'Company\s*=\s*"[^"]*"', "Company    = `"$Company`""
+$scriptContent = $scriptContent -replace 'ExtGuid\s*=\s*"[^"]*"', "ExtGuid    = `"$ExtGuid`""
 $scriptContent = $scriptContent -replace 'StoreCode\s*=\s*"[^"]*"', "StoreCode  = `"$StoreCode`""
 $scriptContent = $scriptContent -replace 'OracleCode\s*=\s*"[^"]*"', "OracleCode = `"$OracleCode`""
 
@@ -112,7 +145,7 @@ try {
     $conn.Close()
 
     if ($tableCount -gt 0) {
-        Write-Host "  [OK] SQL Server connection: $SqlServer — $Database" -ForegroundColor Green
+        Write-Host "  [OK] SQL Server connection: $SqlServer - $Database" -ForegroundColor Green
         Write-Host "  [OK] Tables found: $tableCount LS Central transaction table(s)" -ForegroundColor Green
     }
     else {
@@ -154,11 +187,11 @@ try {
     }
 
     $response = Invoke-RestMethod -Uri "$ApiUrl/health" -Method POST -Body $testPayload -Headers $headers -TimeoutSec 10
-    Write-Host "  [OK] Test POST to $ApiUrl — 200 OK" -ForegroundColor Green
+    Write-Host "  [OK] Test POST to $ApiUrl - 200 OK" -ForegroundColor Green
 }
 catch {
     Write-Host "  [WARN] Could not reach API: $_" -ForegroundColor Yellow
-    Write-Host "         The script will still be installed — check network/firewall if this persists" -ForegroundColor Yellow
+    Write-Host "         The script will still be installed - check network/firewall if this persists" -ForegroundColor Yellow
 }
 
 # 5. Register scheduled task
@@ -195,9 +228,9 @@ Register-ScheduledTask `
     -Trigger $trigger `
     -Principal $principal `
     -Settings $settings `
-    -Description "CXS Dashboard — daily data sync to collector API" | Out-Null
+    -Description "CXS Dashboard - daily data sync to collector API" | Out-Null
 
-Write-Host "  [OK] Scheduled Task created: $TaskName — daily at $SyncTime" -ForegroundColor Green
+Write-Host "  [OK] Scheduled Task created: $TaskName - daily at $SyncTime" -ForegroundColor Green
 
 # Done
 Write-Host ""
