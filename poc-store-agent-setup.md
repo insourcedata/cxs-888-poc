@@ -266,35 +266,81 @@ AND [Date] > '2026-04-01'
 
 ## Step 12: Install Scheduled Task (Automated Daily Sync)
 
-Once manual test is successful:
+Once the manual test in Step 9 passes, register the Windows Scheduled Task. The installer copies a fresh `cxs-collector.ps1` to `C:\CXS\`, injects the per-store config into the `$Config` block via regex-replace, tests SQL + API connectivity once, and registers a task called `CXS Daily Sync` that runs daily at 02:00 as `SYSTEM` with 3 retries on failure.
+
+Pick the section that matches the store you're installing on.
+
+### 12a. Wendy's Store
+
+Wendy's stores use the LS Central extension table format. `Brand`, `Company`, and `ExtGuid` all default to Wendy's values — pass only the per-store fields.
+
+**UAT (DK003 / FTI Complex):**
 
 ```powershell
 cd C:\CXS
 powershell -ExecutionPolicy Bypass -File .\install-cxs-collector.ps1 `
-    -ApiUrl "https://888.insourcedata.org/api/collect" `
-    -ApiKey "065a4a89d962bfcb35ffa1bf757ac0f3d1b9276098b5514c207492cf333d3217" `
-    -SqlServer "ITLAB-SVR-AZ\np-master" `
-    -Database "NEWPOS" `
-    -StoreCode "DK003" `
+    -ApiUrl     "https://888.insourcedata.org/api/collect" `
+    -ApiKey     "e208da46d44dcd96f4ff1732f85ed306" `
+    -SqlServer  "ITLAB-SVR-AZ\np-master" `
+    -Database   "NEWPOS" `
+    -StoreCode  "DK003" `
     -OracleCode "4058"
 ```
 
-For production stores using localhost, omit `-SqlServer` (defaults to `localhost`).
-
-To set a custom sync time (default is 02:00 AM), add `-SyncTime`:
+**Production stores (SQL Server on localhost — omit `-SqlServer`):**
 
 ```powershell
-# Example: sync at 3:30 AM instead of 2:00 AM
+cd C:\CXS
 powershell -ExecutionPolicy Bypass -File .\install-cxs-collector.ps1 `
-    -ApiUrl "https://888.insourcedata.org/api/collect" `
-    -ApiKey "065a4a89d962bfcb35ffa1bf757ac0f3d1b9276098b5514c207492cf333d3217" `
-    -Database "WSMOD8" `
-    -StoreCode "S059" `
-    -OracleCode "4020" `
-    -SyncTime "3:30AM"
+    -ApiUrl     "https://888.insourcedata.org/api/collect" `
+    -ApiKey     "e208da46d44dcd96f4ff1732f85ed306" `
+    -Database   "WSMOD8" `
+    -StoreCode  "S059" `
+    -OracleCode "4020"
 ```
 
-**Validate (PowerShell):**
+### 12b. Conti's Store
+
+Conti's NOC database uses the older NAV-format table names (`[NOC$Transaction Header]`) instead of the LS Central extension format Wendy's uses (`[<Company>$LSC <Table>$<GUID>]`). Three additional flags switch the agent into NAV mode and tag payloads as `contis` so the server-side processor uses the right caches and normalisers:
+
+- `-Brand "contis"` — sent in every payload; selects the Conti's outlet/product/tender caches server-side
+- `-Company "NOC"` — the table-name prefix (everything before `$` in `NOC$Transaction Header`)
+- `-ExtGuid ""` — empty string triggers NAV-format table names (no `$LSC` infix, no GUID suffix)
+
+```powershell
+cd C:\CXS
+powershell -ExecutionPolicy Bypass -File .\install-cxs-collector.ps1 `
+    -ApiUrl     "https://888.insourcedata.org/api/collect" `
+    -ApiKey     "e208da46d44dcd96f4ff1732f85ed306" `
+    -SqlServer  "SSTSERVER" `
+    -Database   "NOCSSTDB" `
+    -StoreCode  "NOCSST" `
+    -OracleCode "" `
+    -Brand      "contis" `
+    -Company    "NOC" `
+    -ExtGuid    ""
+```
+
+> **Finding `Company` for a Conti's instance.** Open SSMS, switch to the LS Central database, expand `Tables`, and look at any name like `<Prefix>$Transaction Header`. The prefix is your `Company` value. For NOC it's `NOC`; other Conti's environments may differ.
+>
+> **If a Conti's instance turns out to use LS Central extension tables** (e.g. `NOC$LSC Transaction Header$<guid>`), pass that GUID via `-ExtGuid` instead of `""`. The agent picks the right format based on whether `ExtGuid` is empty.
+
+### Custom sync time (either brand)
+
+Default is 02:00 AM. Add `-SyncTime` to stagger or pick a different hour. Both Wendy's and Conti's installs can run at the same time without conflict — they're on different machines, and the collector queues incoming payloads sequentially.
+
+```powershell
+# Sync at 3:30 AM instead of 2:00 AM
+powershell -ExecutionPolicy Bypass -File .\install-cxs-collector.ps1 `
+    -ApiUrl     "https://888.insourcedata.org/api/collect" `
+    -ApiKey     "e208da46d44dcd96f4ff1732f85ed306" `
+    -Database   "WSMOD8" `
+    -StoreCode  "S059" `
+    -OracleCode "4020" `
+    -SyncTime   "3:30AM"
+```
+
+### Validate (PowerShell — same check for both brands)
 
 ```powershell
 $task = Get-ScheduledTask -TaskName "CXS Daily Sync" -ErrorAction SilentlyContinue
@@ -317,11 +363,11 @@ if ($task) {
 - [ ] Trigger shows the configured sync time (default 02:00)
 - [ ] Next Run shows tomorrow's date at the configured time
 
-**Validate (GUI — alternative):**
+### Validate (GUI alternative)
 
 1. Press `Win + R`, type `taskschd.msc`, press Enter
 2. In the left pane, click **Task Scheduler Library**
-3. Find **"CXS Daily Sync"** in the list
+3. Find **CXS Daily Sync** in the list
 4. Confirm: Status = `Ready`, Triggers = `Daily at 2:00 AM` (or your custom time), Run As User = `SYSTEM`
 5. Right-click → **Run** to trigger it manually and confirm it works
 
