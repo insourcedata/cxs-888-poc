@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    CXS Store Data Collector — queries local LS Central SQL Server and sends data to CXS dashboard.
+    CXS Store Data Collector - queries local LS Central SQL Server and sends data to CXS dashboard.
 
 .DESCRIPTION
     Runs on each Wendy's store server. Queries the local LS Central SQL Server
@@ -11,13 +11,13 @@
 
     TWO MODES:
 
-    1. DAILY SYNC (default, no args) — for the Windows Scheduled Task.
+    1. DAILY SYNC (default, no args) - for the Windows Scheduled Task.
        Queries exactly one day's worth of data: yesterday.
-       One POST. No state file — yesterday is always deterministic.
+       One POST. No state file - yesterday is always deterministic.
 
-    2. BACKFILL (-StartDate -EndDate) — for manual backfills / gap recovery.
+    2. BACKFILL (-StartDate -EndDate) - for manual backfills / gap recovery.
        Walks the range one day at a time, one POST per day. If a day fails,
-       the script stops and logs which day failed. Safe to re-run — the
+       the script stops and logs which day failed. Safe to re-run - the
        collector's processor is idempotent (same data won't be inserted twice).
 
 .PARAMETER StartDate
@@ -29,7 +29,7 @@
     Must be supplied together with -StartDate.
 
 .EXAMPLE
-    # Daily sync — runs by scheduled task at 02:00, queries yesterday only
+    # Daily sync - runs by scheduled task at 02:00, queries yesterday only
     .\cxs-collector.ps1
 
 .EXAMPLE
@@ -51,7 +51,7 @@ param(
     [string]$EndDate = ""
 )
 
-# ─── Configuration ──────────────────────────────────────────────────────────────
+# --- Configuration --------------------------------------------------------------
 # These are set per-store during installation
 
 $Config = @{
@@ -59,11 +59,15 @@ $Config = @{
     ApiUrl     = "https://888.insourcedata.org/api/collect"
     ApiKey     = "065a4a89d962bfcb35ffa1bf757ac0f3d1b9276098b5514c207492cf333d3217"
 
-    # SQL Server — Windows Auth, no password needed
+    # SQL Server - Windows Auth, no password needed
     SqlServer  = "ITLAB-SVR-AZ\np-master"    # UAT server
     Database   = "NEWPOS"                    # UAT database
 
-    # LS Central table identifiers
+    # Brand - "wendys" or "contis". Picks the right caches/normalisers
+    # server-side when the payload lands. Required field; sent in every POST.
+    Brand      = "wendys"
+
+    # LS Central table identifiers - vary by brand/installation
     Company    = "WENDYS PH"
     ExtGuid    = "5ecfc871-5d82-43f1-9c54-59685e82318d"
 
@@ -75,11 +79,11 @@ $Config = @{
     LogFile    = "C:\CXS\logs\sync.log"
 }
 
-# ─── TLS setup ─────────────────────────────────────────────────────────────────
+# --- TLS setup -----------------------------------------------------------------
 # Force TLS 1.2 (PowerShell 5.1 defaults to TLS 1.0 which most servers reject)
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-# Accept all certificates — works around PartialChain errors on servers
+# Accept all certificates - works around PartialChain errors on servers
 # that are missing Cloudflare root/intermediate CA certificates.
 # This is safe for this use case: we authenticate via API key, not certificate.
 if (-not ([System.Management.Automation.PSTypeName]'TrustAllCertsPolicy').Type) {
@@ -95,33 +99,33 @@ public class TrustAllCertsPolicy : ICertificatePolicy {
 }
 [System.Net.ServicePointManager]::CertificatePolicy = New-Object TrustAllCertsPolicy
 
-# ─── Validate config ───────────────────────────────────────────────────────────
+# --- Validate config -----------------------------------------------------------
 if (-not $Config.ApiUrl -or -not $Config.ApiKey -or $Config.ApiUrl -match "CHANGE_ME" -or $Config.ApiKey -eq "CHANGE_ME") {
     Write-Host "ERROR: ApiUrl or ApiKey is missing or still has placeholder values." -ForegroundColor Red
     Write-Host "Edit the `$Config block at the top of this script, or run install-cxs-collector.ps1." -ForegroundColor Red
     exit 1
 }
 
-# Validate param pairing — backfill needs both or neither
+# Validate param pairing - backfill needs both or neither
 if (($StartDate -and -not $EndDate) -or ($EndDate -and -not $StartDate)) {
     Write-Host "ERROR: -StartDate and -EndDate must be supplied together (backfill mode)." -ForegroundColor Red
     Write-Host "       Omit both for daily sync mode (queries yesterday)." -ForegroundColor Red
     exit 1
 }
 
-# ─── Tables to extract ──────────────────────────────────────────────────────────
+# --- Tables to extract ----------------------------------------------------------
 
 $Tables = @(
     @{ Name = "Transaction Header";      Alias = "headers"  }
     @{ Name = "Trans_ Sales Entry";      Alias = "sales"    }
     @{ Name = "Trans_ Payment Entry";    Alias = "payments"  }
-    # Infocodes, Safe, Tender — not processed by collector yet, skip to save bandwidth
+    # Infocodes, Safe, Tender - not processed by collector yet, skip to save bandwidth
     # @{ Name = "Trans_ Infocode Entry";   Alias = "infocodes" }
     # @{ Name = "Trans_ Safe Entry";       Alias = "safe"      }
     # @{ Name = "Tender Declar_ Entr";     Alias = "tender"    }
 )
 
-# ─── Helpers ────────────────────────────────────────────────────────────────────
+# --- Helpers --------------------------------------------------------------------
 
 function Write-Log {
     param([string]$Message)
@@ -138,10 +142,17 @@ function Write-Log {
 
 function Get-TableFullName {
     param([string]$TableName)
+    # Two table-name conventions seen in the field:
+    #   LS Central extension tables (Wendy's UAT): [<Company>$LSC <Table>$<ExtGuid>]
+    #   NAV / legacy LS (Conti's NOC):             [<Company>$<Table>]
+    # Empty ExtGuid -> NAV format. Wendy's keeps its GUID and gets the LS path.
+    if ([string]::IsNullOrWhiteSpace($Config.ExtGuid)) {
+        return "[$($Config.Company)`$$TableName]"
+    }
     return "[$($Config.Company)`$LSC $TableName`$$($Config.ExtGuid)]"
 }
 
-# ─── Per-day sync ───────────────────────────────────────────────────────────────
+# --- Per-day sync ---------------------------------------------------------------
 # Queries all three LS tables for a single date, builds the payload, POSTs.
 # Returns $true on success (HTTP 200), $false on any failure.
 
@@ -151,6 +162,7 @@ function Invoke-DaySync {
     $connString = "Server=$($Config.SqlServer);Database=$($Config.Database);Integrated Security=True;TrustServerCertificate=True;"
 
     $payload = @{
+        brand      = $Config.Brand
         storeCode  = $Config.StoreCode
         oracleCode = $Config.OracleCode
         syncDate   = $Day
@@ -210,11 +222,11 @@ function Invoke-DaySync {
     }
 
     if ($totalRows -eq 0) {
-        Write-Log "  [$Day] no rows — skipping POST"
-        return $true  # empty day is a "success" — don't want to block the backfill loop
+        Write-Log "  [$Day] no rows - skipping POST"
+        return $true  # empty day is a "success" - don't want to block the backfill loop
     }
 
-    Write-Log ("  [$Day] {0} headers, {1} sales, {2} payments — POSTing…" -f `
+    Write-Log ("  [$Day] {0} headers, {1} sales, {2} payments - POSTing..." -f `
         $payload.tables.headers.Count, $payload.tables.sales.Count, $payload.tables.payments.Count)
 
     try {
@@ -236,7 +248,7 @@ function Invoke-DaySync {
     }
 }
 
-# ─── Main ───────────────────────────────────────────────────────────────────────
+# --- Main -----------------------------------------------------------------------
 
 function Invoke-Sync {
     Write-Log "=== CXS Sync Start ==="
@@ -267,13 +279,13 @@ function Invoke-Sync {
             $cursor = $cursor.AddDays(1)
         }
 
-        Write-Log "Mode: BACKFILL — $($days.Count) day(s) from $StartDate to $EndDate"
+        Write-Log "Mode: BACKFILL - $($days.Count) day(s) from $StartDate to $EndDate"
     }
     else {
-        # Daily sync mode — yesterday only
+        # Daily sync mode - yesterday only
         $yesterday = (Get-Date).Date.AddDays(-1).ToString("yyyy-MM-dd")
         $days = @($yesterday)
-        Write-Log "Mode: DAILY — syncing yesterday ($yesterday)"
+        Write-Log "Mode: DAILY - syncing yesterday ($yesterday)"
     }
 
     # Walk days in order, stop on first failure
@@ -294,7 +306,7 @@ function Invoke-Sync {
         exit 1
     }
 
-    Write-Log "=== CXS Sync Complete — $succeeded/$($days.Count) days ok ==="
+    Write-Log "=== CXS Sync Complete - $succeeded/$($days.Count) days ok ==="
 }
 
 # Run
