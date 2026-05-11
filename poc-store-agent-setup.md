@@ -101,7 +101,9 @@ You can copy via:
 **Validate:**
 
 ```powershell
-Test-Path "C:\CXS\cxs-collector.ps1"
+Test-Path "C:\CXS\cxs-collector.ps1"   # template file
+# Or after running installer:
+Test-Path "C:\CXS\cxs-collector-{StoreCode}.ps1"  # per-store installed copy
 ```
 
 Returns `True`.
@@ -257,17 +259,17 @@ The script has two modes:
 **Mode 1 — Daily (no arguments).** Queries yesterday only. This is what the scheduled task runs every night.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector.ps1"
+powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector-{StoreCode}.ps1"
 ```
 
 **Mode 2 — Backfill (`-StartDate` / `-EndDate`).** Walks a date range one day at a time, one POST per day. Use this for historical data or to re-sync a specific date.
 
 ```powershell
 # Sync a single specific date
-powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector.ps1" -StartDate "2026-04-10" -EndDate "2026-04-10"
+powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector-{StoreCode}.ps1" -StartDate "2026-04-10" -EndDate "2026-04-10"
 
 # Sync a range (e.g. all of March)
-powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector.ps1" -StartDate "2026-03-01" -EndDate "2026-03-31"
+powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector-{StoreCode}.ps1" -StartDate "2026-03-01" -EndDate "2026-03-31"
 ```
 
 Both modes are **idempotent** — safe to re-run. If the data already exists, duplicates are skipped.
@@ -533,10 +535,10 @@ if ($task) {
 
 ## Step 14: Verify Automated Run (Next Day)
 
-The morning after installation, check the log for the 02:00 run:
+The morning after installation, check the log for the 02:00 run (replace `{StoreCode}` with the actual store code):
 
 ```powershell
-Get-Content C:\CXS\logs\sync.log -Tail 30
+Get-Content "C:\CXS\logs\sync-{StoreCode}.log" -Tail 30
 ```
 
 **Validate:**
@@ -547,11 +549,11 @@ Get-Content C:\CXS\logs\sync.log -Tail 30
 If the log doesn't show a 02:00 run:
 
 ```powershell
-Get-ScheduledTask -TaskName "CXS Daily Sync" | Get-ScheduledTaskInfo | Select-Object LastRunTime, LastTaskResult
+Get-ScheduledTask -TaskName "CXS Daily Sync - {StoreCode}" | Get-ScheduledTaskInfo | Select-Object LastRunTime, LastTaskResult
 ```
 
 - `LastTaskResult` of `0` = success
-- Any other value = failure (check `C:\CXS\logs\sync.log`)
+- Any other value = failure (check `C:\CXS\logs\sync-{StoreCode}.log`)
 
 ---
 
@@ -685,10 +687,10 @@ The failed day won't be automatically retried. To fill the gap, RDP into the sto
 
 ```powershell
 # Replay a single missed day
-powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector.ps1" -StartDate "2026-04-14" -EndDate "2026-04-14"
+powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector-{StoreCode}.ps1" -StartDate "2026-04-14" -EndDate "2026-04-14"
 
 # Replay a range of missed days
-powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector.ps1" -StartDate "2026-04-14" -EndDate "2026-04-16"
+powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector-{StoreCode}.ps1" -StartDate "2026-04-14" -EndDate "2026-04-16"
 ```
 
 Safe to re-run even if the day partially succeeded — duplicate transactions are skipped automatically.
@@ -699,7 +701,7 @@ For a new store that needs months of historical data loaded:
 
 ```powershell
 # Backfill all of Q1 2026 (walks day by day, one POST per day)
-powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector.ps1" -StartDate "2026-01-01" -EndDate "2026-03-31"
+powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector-{StoreCode}.ps1" -StartDate "2026-01-01" -EndDate "2026-03-31"
 ```
 
 If any day fails mid-backfill, the script stops and prints the exact command to resume from the failed day.
@@ -712,4 +714,4 @@ If any day fails mid-backfill, the script stops and prints the exact command to 
 | `ERROR posting` in log | Network/API issue | Run Step 8 diagnostics (DNS → TCP → HTTPS) |
 | `ERROR querying` in log | SQL Server down or unreachable | Check SQL Server service is running |
 | Log shows success but no data on dashboard | Empty day (no transactions yesterday) | Normal — check a day you know has data |
-| Task shows `LastTaskResult = 1` | Script exited with error | Read the full log: `Get-Content C:\CXS\logs\sync.log` |
+| Task shows `LastTaskResult = 1` | Script exited with error | Read the full log: `Get-Content "C:\CXS\logs\sync-{StoreCode}.log"` |
