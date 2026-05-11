@@ -74,8 +74,11 @@ param(
     [Parameter(Mandatory=$true)]
     [string]$StoreCode,
 
-    [Parameter(Mandatory=$true)]
-    [string]$OracleCode,
+    # OracleCode is metadata only — Wendy's uses it (e.g. 4058), Conti's doesn't.
+    # Non-mandatory + AllowEmptyString so Conti's installs can pass "" or omit.
+    [Parameter(Mandatory=$false)]
+    [AllowEmptyString()]
+    [string]$OracleCode = "",
 
     [Parameter(Mandatory=$false)]
     [string]$SyncTime = "2:00AM",
@@ -87,7 +90,10 @@ param(
     [Parameter(Mandatory=$false)]
     [string]$Company = "WENDYS PH",
 
+    # ExtGuid empty string => NAV-format table names (Conti's NOC).
+    # AllowEmptyString is required because [string] params silently reject "" by default.
     [Parameter(Mandatory=$false)]
+    [AllowEmptyString()]
     [string]$ExtGuid = "5ecfc871-5d82-43f1-9c54-59685e82318d"
 )
 
