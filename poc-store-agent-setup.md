@@ -257,20 +257,17 @@ The script has two modes:
 **Mode 1 — Daily (no arguments).** Queries yesterday only. This is what the scheduled task runs every night.
 
 ```powershell
-cd C:\CXS
-powershell -ExecutionPolicy Bypass -File .\cxs-collector.ps1
+powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector.ps1"
 ```
 
 **Mode 2 — Backfill (`-StartDate` / `-EndDate`).** Walks a date range one day at a time, one POST per day. Use this for historical data or to re-sync a specific date.
 
 ```powershell
-cd C:\CXS
-
 # Sync a single specific date
-powershell -ExecutionPolicy Bypass -File .\cxs-collector.ps1 -StartDate "2026-04-10" -EndDate "2026-04-10"
+powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector.ps1" -StartDate "2026-04-10" -EndDate "2026-04-10"
 
 # Sync a range (e.g. all of March)
-powershell -ExecutionPolicy Bypass -File .\cxs-collector.ps1 -StartDate "2026-03-01" -EndDate "2026-03-31"
+powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector.ps1" -StartDate "2026-03-01" -EndDate "2026-03-31"
 ```
 
 Both modes are **idempotent** — safe to re-run. If the data already exists, duplicates are skipped.
@@ -438,8 +435,7 @@ Wendy's stores use the LS Central extension table format. `Brand`, `Company`, an
 **UAT (DK003 / FTI Complex):**
 
 ```powershell
-cd C:\CXS
-powershell -ExecutionPolicy Bypass -File .\install-cxs-collector.ps1 `
+powershell -ExecutionPolicy Bypass -File "C:\CXS\install-cxs-collector.ps1" `
     -ApiUrl     "https://888.insourcedata.org/api/collect" `
     -ApiKey     "e208da46d44dcd96f4ff1732f85ed306" `
     -SqlServer  "ITLAB-SVR-AZ\np-master" `
@@ -451,8 +447,7 @@ powershell -ExecutionPolicy Bypass -File .\install-cxs-collector.ps1 `
 **Production stores (SQL Server on localhost — omit `-SqlServer`):**
 
 ```powershell
-cd C:\CXS
-powershell -ExecutionPolicy Bypass -File .\install-cxs-collector.ps1 `
+powershell -ExecutionPolicy Bypass -File "C:\CXS\install-cxs-collector.ps1" `
     -ApiUrl     "https://888.insourcedata.org/api/collect" `
     -ApiKey     "e208da46d44dcd96f4ff1732f85ed306" `
     -Database   "WSMOD8" `
@@ -469,8 +464,7 @@ Conti's NOC database uses the older NAV-format table names (`[NOC$Transaction He
 - `-ExtGuid ""` — empty string triggers NAV-format table names (no `$LSC` infix, no GUID suffix)
 
 ```powershell
-cd C:\CXS
-powershell -ExecutionPolicy Bypass -File .\install-cxs-collector.ps1 `
+powershell -ExecutionPolicy Bypass -File "C:\CXS\install-cxs-collector.ps1" `
     -ApiUrl     "https://888.insourcedata.org/api/collect" `
     -ApiKey     "e208da46d44dcd96f4ff1732f85ed306" `
     -SqlServer  "SSTSERVER" `
@@ -492,7 +486,7 @@ Default is 02:00 AM. Add `-SyncTime` to stagger or pick a different hour. Both W
 
 ```powershell
 # Sync at 3:30 AM instead of 2:00 AM
-powershell -ExecutionPolicy Bypass -File .\install-cxs-collector.ps1 `
+powershell -ExecutionPolicy Bypass -File "C:\CXS\install-cxs-collector.ps1" `
     -ApiUrl     "https://888.insourcedata.org/api/collect" `
     -ApiKey     "e208da46d44dcd96f4ff1732f85ed306" `
     -Database   "WSMOD8" `
@@ -655,13 +649,11 @@ Get-ScheduledTask -TaskName "CXS Daily Sync" | Get-ScheduledTaskInfo | Select-Ob
 The failed day won't be automatically retried. To fill the gap, RDP into the store and run:
 
 ```powershell
-cd C:\CXS
-
 # Replay a single missed day
-powershell -ExecutionPolicy Bypass -File .\cxs-collector.ps1 -StartDate "2026-04-14" -EndDate "2026-04-14"
+powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector.ps1" -StartDate "2026-04-14" -EndDate "2026-04-14"
 
 # Replay a range of missed days
-powershell -ExecutionPolicy Bypass -File .\cxs-collector.ps1 -StartDate "2026-04-14" -EndDate "2026-04-16"
+powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector.ps1" -StartDate "2026-04-14" -EndDate "2026-04-16"
 ```
 
 Safe to re-run even if the day partially succeeded — duplicate transactions are skipped automatically.
@@ -671,10 +663,8 @@ Safe to re-run even if the day partially succeeded — duplicate transactions ar
 For a new store that needs months of historical data loaded:
 
 ```powershell
-cd C:\CXS
-
 # Backfill all of Q1 2026 (walks day by day, one POST per day)
-powershell -ExecutionPolicy Bypass -File .\cxs-collector.ps1 -StartDate "2026-01-01" -EndDate "2026-03-31"
+powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector.ps1" -StartDate "2026-01-01" -EndDate "2026-03-31"
 ```
 
 If any day fails mid-backfill, the script stops and prints the exact command to resume from the failed day.
