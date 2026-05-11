@@ -74,11 +74,8 @@ param(
     [Parameter(Mandatory=$true)]
     [string]$StoreCode,
 
-    # OracleCode is metadata only — Wendy's uses it (e.g. 4058), Conti's doesn't.
-    # Non-mandatory + AllowEmptyString so Conti's installs can pass "" or omit.
-    [Parameter(Mandatory=$false)]
-    [AllowEmptyString()]
-    [string]$OracleCode = "",
+    [Parameter(Mandatory=$true)]
+    [string]$OracleCode,
 
     [Parameter(Mandatory=$false)]
     [string]$SyncTime = "2:00AM",
@@ -90,33 +87,30 @@ param(
     [Parameter(Mandatory=$false)]
     [string]$Company = "WENDYS PH",
 
-    # ExtGuid empty string => NAV-format table names (Conti's NOC).
-    # AllowEmptyString is required because [string] params silently reject "" by default.
     [Parameter(Mandatory=$false)]
-    [AllowEmptyString()]
     [string]$ExtGuid = "5ecfc871-5d82-43f1-9c54-59685e82318d"
 )
 
 $InstallDir = "C:\CXS"
-$ScriptName = "cxs-collector.ps1"
-$TaskName = "CXS Daily Sync"
+$ScriptName = "cxs-collector-$StoreCode.ps1"
+$TaskName   = "CXS Daily Sync - $StoreCode"
 
 Write-Host ""
 Write-Host "=== CXS Collector Installer ===" -ForegroundColor Cyan
 Write-Host ""
 
 # 1. Create install directory
-Write-Host "[1/5] Creating install directory: $InstallDir"
+Write-Host "[1/4] Creating install directory: $InstallDir"
 if (-not (Test-Path $InstallDir)) {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 }
 New-Item -ItemType Directory -Path "$InstallDir\logs" -Force | Out-Null
 
 # 2. Copy collector script and set configuration
-Write-Host "[2/5] Installing collector script..."
-$sourceScript = Join-Path $PSScriptRoot $ScriptName
+Write-Host "[2/4] Installing collector script..."
+$sourceScript = Join-Path $PSScriptRoot "cxs-collector.ps1"
 if (-not (Test-Path $sourceScript)) {
-    Write-Host "  ERROR: $ScriptName not found in $PSScriptRoot" -ForegroundColor Red
+    Write-Host "  ERROR: cxs-collector.ps1 not found in $PSScriptRoot" -ForegroundColor Red
     exit 1
 }
 
@@ -132,40 +126,14 @@ $scriptContent = $scriptContent -replace 'Company\s*=\s*"[^"]*"', "Company    = 
 $scriptContent = $scriptContent -replace 'ExtGuid\s*=\s*"[^"]*"', "ExtGuid    = `"$ExtGuid`""
 $scriptContent = $scriptContent -replace 'StoreCode\s*=\s*"[^"]*"', "StoreCode  = `"$StoreCode`""
 $scriptContent = $scriptContent -replace 'OracleCode\s*=\s*"[^"]*"', "OracleCode = `"$OracleCode`""
+$scriptContent = $scriptContent -replace 'LogFile\s*=\s*"[^"]*"', "LogFile    = `"C:\CXS\logs\sync-$StoreCode.log`""
 
 $destScript = Join-Path $InstallDir $ScriptName
-Set-Content -Path $destScript -Value $scriptContent
+Set-Content -Path $destScript -Value $scriptContent -Encoding UTF8
 Write-Host "  Installed to: $destScript" -ForegroundColor Green
 
-# 3. Test SQL Server connection
-Write-Host "[3/5] Testing SQL Server connection..."
-try {
-    $connString = "Server=$SqlServer;Database=$Database;Integrated Security=True;TrustServerCertificate=True;"
-    $conn = New-Object System.Data.SqlClient.SqlConnection($connString)
-    $conn.Open()
-
-    # Check for LS Central tables
-    $cmd = $conn.CreateCommand()
-    $cmd.CommandText = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME LIKE '%LSC Transaction Header%'"
-    $tableCount = $cmd.ExecuteScalar()
-    $conn.Close()
-
-    if ($tableCount -gt 0) {
-        Write-Host "  [OK] SQL Server connection: $SqlServer - $Database" -ForegroundColor Green
-        Write-Host "  [OK] Tables found: $tableCount LS Central transaction table(s)" -ForegroundColor Green
-    }
-    else {
-        Write-Host "  [WARN] Connected to SQL Server but no LS Central tables found" -ForegroundColor Yellow
-        Write-Host "         Check that '$Database' is the correct database name" -ForegroundColor Yellow
-    }
-}
-catch {
-    Write-Host "  [FAIL] Could not connect to SQL Server: $_" -ForegroundColor Red
-    Write-Host "         Make sure SQL Server is running and the database name is correct" -ForegroundColor Red
-}
-
-# 4. Test API connectivity
-Write-Host "[4/5] Testing API connectivity..."
+# 3. Test SQL + send install checkin to collector
+Write-Host "[3/4] Testing SQL + sending install checkin..."
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 if (-not ([System.Management.Automation.PSTypeName]'TrustAllCertsPolicy').Type) {
     Add-Type @"
@@ -179,29 +147,73 @@ public class TrustAllCertsPolicy : ICertificatePolicy {
 "@
 }
 [System.Net.ServicePointManager]::CertificatePolicy = New-Object TrustAllCertsPolicy
-try {
-    $testPayload = @{
-        storeCode  = $StoreCode
-        oracleCode = $OracleCode
-        test       = $true
-    } | ConvertTo-Json
 
+$checkin = @{
+    storeCode    = $StoreCode
+    brand        = $Brand
+    event        = "install"
+    agentVersion = "2.0"
+    hostname     = $env:COMPUTERNAME
+    osVersion    = [System.Environment]::OSVersion.VersionString
+    psVersion    = $PSVersionTable.PSVersion.ToString()
+    runAsUser    = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    sqlServer    = $SqlServer
+    sqlDatabase  = $Database
+}
+
+# Test SQL as current user
+try {
+    $testConn = New-Object System.Data.SqlClient.SqlConnection(
+        "Server=$SqlServer;Database=$Database;Integrated Security=True;TrustServerCertificate=True;Connection Timeout=10;"
+    )
+    $testConn.Open()
+    $testConn.Close()
+    $checkin.sqlConnectable = $true
+    Write-Host "  [OK] SQL Server connection: $SqlServer - $Database" -ForegroundColor Green
+}
+catch {
+    $checkin.sqlConnectable = $false
+    $checkin.sqlError = $_.Exception.Message
+    Write-Host "  [FAIL] SQL Server: $_" -ForegroundColor Red
+}
+
+# Check for tables (both LS Central and NAV format)
+try {
+    $testConn2 = New-Object System.Data.SqlClient.SqlConnection(
+        "Server=$SqlServer;Database=$Database;Integrated Security=True;TrustServerCertificate=True;"
+    )
+    $testConn2.Open()
+    $cmd = $testConn2.CreateCommand()
+    $cmd.CommandText = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME LIKE '%Transaction Header%'"
+    $tableCount = $cmd.ExecuteScalar()
+    $testConn2.Close()
+    if ($tableCount -gt 0) {
+        Write-Host "  [OK] Found $tableCount transaction table(s)" -ForegroundColor Green
+    }
+    else {
+        Write-Host "  [WARN] No transaction tables found - check database name" -ForegroundColor Yellow
+    }
+}
+catch {}
+
+# Send checkin
+try {
+    $checkinUrl = "$ApiUrl" -replace '/api/collect$', '/api/collect/checkin'
+    $json = $checkin | ConvertTo-Json -Depth 5 -Compress
     $headers = @{
         "Content-Type"  = "application/json"
         "Authorization" = "Bearer $ApiKey"
-        "X-Store-Code"  = $StoreCode
     }
-
-    $response = Invoke-RestMethod -Uri "$ApiUrl/health" -Method POST -Body $testPayload -Headers $headers -TimeoutSec 10
-    Write-Host "  [OK] Test POST to $ApiUrl - 200 OK" -ForegroundColor Green
+    $response = Invoke-RestMethod -Uri $checkinUrl -Method POST -Body $json -Headers $headers -TimeoutSec 15
+    Write-Host "  [OK] Install checkin sent to collector" -ForegroundColor Green
 }
 catch {
-    Write-Host "  [WARN] Could not reach API: $_" -ForegroundColor Yellow
-    Write-Host "         The script will still be installed - check network/firewall if this persists" -ForegroundColor Yellow
+    Write-Host "  [WARN] Could not send checkin: $_" -ForegroundColor Yellow
+    Write-Host "         The agent will still be installed - check network if this persists" -ForegroundColor Yellow
 }
 
-# 5. Register scheduled task
-Write-Host "[5/5] Creating scheduled task: '$TaskName' ..."
+# 4. Register scheduled task
+Write-Host "[4/4] Creating scheduled task: '$TaskName' ..."
 
 # Remove existing task if present
 $existingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
@@ -242,10 +254,12 @@ Write-Host "  [OK] Scheduled Task created: $TaskName - daily at $SyncTime" -Fore
 Write-Host ""
 Write-Host "=== Installation Complete ===" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "Files installed to: $InstallDir"
+Write-Host "Store:          $StoreCode ($OracleCode)"
+Write-Host "Brand:          $Brand"
+Write-Host "Files:          $InstallDir\$ScriptName"
 Write-Host "Scheduled task: '$TaskName' (daily at $SyncTime)"
-Write-Host "Logs: $InstallDir\logs\sync.log"
+Write-Host "Logs:           C:\CXS\logs\sync-$StoreCode.log"
 Write-Host ""
 Write-Host "To run a sync manually:" -ForegroundColor Yellow
-Write-Host "  powershell -File `"$destScript`"" -ForegroundColor Yellow
+Write-Host "  powershell -File `"$(Join-Path $InstallDir $ScriptName)`"" -ForegroundColor Yellow
 Write-Host ""

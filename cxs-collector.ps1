@@ -99,6 +99,122 @@ public class TrustAllCertsPolicy : ICertificatePolicy {
 }
 [System.Net.ServicePointManager]::CertificatePolicy = New-Object TrustAllCertsPolicy
 
+# --- Agent version ----------------------------------------------------------------
+$AgentVersion = "2.0"
+
+# --- Telemetry --------------------------------------------------------------------
+
+function Send-Checkin {
+    param(
+        [string]$Event,
+        [string]$ErrorMessage = ""
+    )
+
+    $checkin = @{
+        storeCode    = $Config.StoreCode
+        brand        = $Config.Brand
+        event        = $Event
+        agentVersion = $AgentVersion
+        hostname     = $env:COMPUTERNAME
+        osVersion    = [System.Environment]::OSVersion.VersionString
+        psVersion    = $PSVersionTable.PSVersion.ToString()
+        runAsUser    = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+        sqlServer    = $Config.SqlServer
+        sqlDatabase  = $Config.Database
+    }
+
+    # System resources
+    try {
+        $cDrive = Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='C:'" -ErrorAction SilentlyContinue
+        if ($cDrive) {
+            $checkin.diskFreeGb  = [math]::Round($cDrive.FreeSpace / 1GB, 1).ToString()
+            $checkin.diskTotalGb = [math]::Round($cDrive.Size / 1GB, 1).ToString()
+        }
+
+        $os = Get-WmiObject Win32_OperatingSystem -ErrorAction SilentlyContinue
+        if ($os) {
+            $checkin.ramFreeGb  = [math]::Round(($os.FreePhysicalMemory / 1MB), 1).ToString()
+            $checkin.ramTotalGb = [math]::Round(($os.TotalVisibleMemorySize / 1MB), 1).ToString()
+            $lastBoot = $os.ConvertToDateTime($os.LastBootUpTime)
+            $checkin.lastRebootAt = $lastBoot.ToString("yyyy-MM-dd HH:mm:ss")
+            $uptime = (Get-Date) - $lastBoot
+            $checkin.systemUptime = "{0}d {1}h {2}m" -f $uptime.Days, $uptime.Hours, $uptime.Minutes
+        }
+
+        $cpu = Get-WmiObject Win32_Processor -ErrorAction SilentlyContinue | Measure-Object -Property LoadPercentage -Average
+        if ($null -ne $cpu.Average) {
+            $checkin.cpuUsagePercent = [int]$cpu.Average
+        }
+    }
+    catch {}
+
+    # Test SQL connectivity
+    try {
+        $testConn = New-Object System.Data.SqlClient.SqlConnection(
+            "Server=$($Config.SqlServer);Database=$($Config.Database);Integrated Security=True;TrustServerCertificate=True;Connection Timeout=10;"
+        )
+        $testConn.Open()
+        $testConn.Close()
+        $checkin.sqlConnectable = $true
+        $checkin.sqlError = $null
+    }
+    catch {
+        $checkin.sqlConnectable = $false
+        $checkin.sqlError = $_.Exception.Message
+    }
+
+    # Scheduled task status
+    try {
+        $taskName = "CXS Daily Sync"
+        # Check store-specific task name first (v2.0+), fall back to legacy
+        $task = Get-ScheduledTask -TaskName "CXS Daily Sync - $($Config.StoreCode)" -ErrorAction SilentlyContinue
+        if (-not $task) {
+            $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        }
+        if ($task) {
+            $checkin.taskExists = $true
+            $info = $task | Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
+            if ($info) {
+                $checkin.taskLastRun = if ($info.LastRunTime) { $info.LastRunTime.ToString("yyyy-MM-dd HH:mm:ss") } else { $null }
+                $checkin.taskLastResult = $info.LastTaskResult
+            }
+        }
+        else {
+            $checkin.taskExists = $false
+        }
+    }
+    catch {
+        $checkin.taskExists = $null
+    }
+
+    # Last 5 lines of sync log
+    if (Test-Path $Config.LogFile) {
+        try {
+            $checkin.syncLogTail = (Get-Content $Config.LogFile -Tail 5) -join "`n"
+        }
+        catch {}
+    }
+
+    if ($ErrorMessage) {
+        $checkin.errorMessage = $ErrorMessage
+    }
+
+    # Send checkin — best-effort, don't block sync on telemetry failure
+    try {
+        $json = $checkin | ConvertTo-Json -Depth 5 -Compress
+        $hdrs = @{
+            "Content-Type"  = "application/json"
+            "Authorization" = "Bearer $($Config.ApiKey)"
+        }
+        # Derive checkin URL from ApiUrl
+        $checkinUrl = $Config.ApiUrl -replace '/api/collect$', '/api/collect/checkin'
+        Invoke-RestMethod -Uri $checkinUrl -Method POST -Body $json -Headers $hdrs -TimeoutSec 15 | Out-Null
+    }
+    catch {
+        Write-Log "  [checkin] Failed to send telemetry: $_"
+    }
+}
+
 # --- Validate config -----------------------------------------------------------
 if (-not $Config.ApiUrl -or -not $Config.ApiKey -or $Config.ApiUrl -match "CHANGE_ME" -or $Config.ApiKey -eq "CHANGE_ME") {
     Write-Host "ERROR: ApiUrl or ApiKey is missing or still has placeholder values." -ForegroundColor Red
@@ -255,6 +371,9 @@ function Invoke-Sync {
     Write-Log "Store:  $($Config.StoreCode) ($($Config.OracleCode))"
     Write-Log "Server: $($Config.SqlServer) / $($Config.Database)"
 
+    # Pre-flight telemetry
+    Send-Checkin -Event "sync_start"
+
     # Figure out which days to sync
     if ($StartDate) {
         # Backfill mode
@@ -303,10 +422,12 @@ function Invoke-Sync {
     if ($failed) {
         Write-Log "=== CXS Sync FAILED on $failed (completed $succeeded/$($days.Count) days) ==="
         Write-Log "Re-run with: .\cxs-collector.ps1 -StartDate `"$failed`" -EndDate `"$($days[-1])`""
+        Send-Checkin -Event "sync_error" -ErrorMessage "Failed on $failed after $succeeded/$($days.Count) days"
         exit 1
     }
 
     Write-Log "=== CXS Sync Complete - $succeeded/$($days.Count) days ok ==="
+    Send-Checkin -Event "sync_complete"
 }
 
 # Run

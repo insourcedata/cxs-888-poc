@@ -424,7 +424,9 @@ If this returns `POST ok: accepted`, the scheduled task will work the next morni
 
 ## Step 13: Install Scheduled Task (Automated Daily Sync)
 
-Once the manual test in Step 9 passes **and SYSTEM has SQL access (Step 12)**, register the Windows Scheduled Task. The installer copies a fresh `cxs-collector.ps1` to `C:\CXS\`, injects the per-store config into the `$Config` block via regex-replace, tests SQL + API connectivity once, and registers a task called `CXS Daily Sync` that runs daily at 02:00 as `SYSTEM` with 3 retries on failure.
+Once the manual test in Step 9 passes **and SYSTEM has SQL access (Step 12)**, register the Windows Scheduled Task. The installer copies `cxs-collector.ps1` to `C:\CXS\cxs-collector-{StoreCode}.ps1`, injects the per-store config via regex-replace, sends a telemetry checkin to the collector, and registers a task called `CXS Daily Sync - {StoreCode}` that runs daily at 02:00 as `SYSTEM` with 3 retries on failure.
+
+> **Multi-store support:** Each store gets its own script, task, and log file. Multiple stores on the same server no longer overwrite each other.
 
 Pick the section that matches the store you're installing on.
 
@@ -498,7 +500,8 @@ powershell -ExecutionPolicy Bypass -File "C:\CXS\install-cxs-collector.ps1" `
 ### Validate (PowerShell — same check for both brands)
 
 ```powershell
-$task = Get-ScheduledTask -TaskName "CXS Daily Sync" -ErrorAction SilentlyContinue
+# Replace StoreCode with the actual store code (e.g. "CXS Daily Sync - S059")
+$task = Get-ScheduledTask -TaskName "CXS Daily Sync - S059" -ErrorAction SilentlyContinue
 if ($task) {
     $info = $task | Get-ScheduledTaskInfo
     Write-Host "Task Name:    $($task.TaskName)" -ForegroundColor Green
@@ -552,6 +555,30 @@ Get-ScheduledTask -TaskName "CXS Daily Sync" | Get-ScheduledTaskInfo | Select-Ob
 
 ---
 
+## Updating Existing Installs
+
+If a store already has an older version installed, use the update script to patch it without re-running the full installer. The updater reads the existing config, writes the new script version with the same config, and optionally migrates to per-store format.
+
+Copy `cxs-collector.ps1` (new version) and `update-cxs-collector.ps1` to the store server, then run:
+
+```powershell
+# Update in-place (preserves config, adds telemetry)
+powershell -ExecutionPolicy Bypass -File "C:\CXS\update-cxs-collector.ps1"
+
+# If multiple stores on same server, also migrate legacy single-file to per-store format
+powershell -ExecutionPolicy Bypass -File "C:\CXS\update-cxs-collector.ps1" -Migrate
+```
+
+**What `-Migrate` does:**
+- Renames `C:\CXS\cxs-collector.ps1` → `C:\CXS\cxs-collector-{StoreCode}.ps1`
+- Renames task `CXS Daily Sync` → `CXS Daily Sync - {StoreCode}`
+- Sets log to `C:\CXS\logs\sync-{StoreCode}.log`
+- Preserves existing trigger time and settings
+
+Safe to run multiple times. Does not touch scheduled task timing.
+
+---
+
 ## Known Issues
 
 ### FortiGate Firewall Blocking
@@ -591,7 +618,9 @@ Windows Servers may be missing Cloudflare's root CA certificates. Symptoms:
 
 ## Logs Location
 
-All logs are written to `C:\CXS\logs\sync.log`. Share this file with CXS (Arshath) if troubleshooting is needed.
+Logs are written per-store to `C:\CXS\logs\sync-{StoreCode}.log` (e.g. `sync-S059.log`). Share this file with CXS (Arshath) if troubleshooting is needed.
+
+> Legacy installs (before v2.0) wrote to `C:\CXS\logs\sync.log`. The update script migrates to per-store logs.
 
 ---
 
@@ -601,11 +630,15 @@ After setup, the store server should have:
 
 ```
 C:\CXS\
-├── cxs-collector.ps1          # Main sync script (pre-configured for this store)
-├── install-cxs-collector.ps1  # Installer for scheduled task (run once during setup)
+├── cxs-collector-S059.ps1         # Main sync script (per-store, pre-configured)
+├── install-cxs-collector.ps1      # Installer (run once during setup)
+├── update-cxs-collector.ps1       # Updater (patches installed scripts to latest version)
+├── cxs-collector.ps1              # Source template (used by installer and updater)
 └── logs\
-    └── sync.log               # Sync logs (appended to daily)
+    └── sync-S059.log              # Per-store sync log (appended to daily)
 ```
+
+> Multiple stores on the same server each get their own `cxs-collector-{StoreCode}.ps1` and `sync-{StoreCode}.log`.
 
 ---
 
@@ -615,11 +648,13 @@ Once the scheduled task is installed, the store server automatically syncs data 
 
 ### What happens at 02:00
 
-1. Windows Task Scheduler runs `cxs-collector.ps1` as SYSTEM
-2. The script queries LS Central for **yesterday's** transactions (headers + sales + payments)
-3. Builds a JSON payload and POSTs it to `https://888.insourcedata.org/api/collect`
-4. The CXS collector receives, validates, and inserts the data into PostgreSQL
-5. If the transaction already exists (re-run), it's skipped — no duplicates
+1. Windows Task Scheduler runs `cxs-collector-{StoreCode}.ps1` as SYSTEM
+2. The script sends a **telemetry checkin** to the collector (system info, SQL connectivity, disk/RAM/CPU — viewable in the admin dashboard under "Agent health")
+3. The script queries LS Central for **yesterday's** transactions (headers + sales + payments)
+4. Builds a JSON payload and POSTs it to `https://888.insourcedata.org/api/collect`
+5. The CXS collector receives, validates, and inserts the data into PostgreSQL
+6. If the transaction already exists (re-run), it's skipped — no duplicates
+7. On completion (or failure), a final checkin is sent with the result
 
 The script is **stateless** — it always queries yesterday. No state files, no cursors, no "how far back" logic.
 
@@ -628,11 +663,11 @@ The script is **stateless** — it always queries yesterday. No state files, no 
 **On the store server** (RDP in, check the log):
 
 ```powershell
-# Last 30 lines of the log
-Get-Content C:\CXS\logs\sync.log -Tail 30
+# Last 30 lines of the log (replace StoreCode)
+Get-Content "C:\CXS\logs\sync-S059.log" -Tail 30
 
-# Check last run time and result
-Get-ScheduledTask -TaskName "CXS Daily Sync" | Get-ScheduledTaskInfo | Select-Object LastRunTime, LastTaskResult
+# Check last run time and result (replace StoreCode)
+Get-ScheduledTask -TaskName "CXS Daily Sync - S059" | Get-ScheduledTaskInfo | Select-Object LastRunTime, LastTaskResult
 ```
 
 - `LastTaskResult = 0` means success
