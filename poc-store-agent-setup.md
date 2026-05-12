@@ -1,25 +1,14 @@
 # POC Store Agent Setup Guide
 
-> Step-by-step guide for installing and testing the CXS data collector on a store server. Works for both **Wendy's** and **Conti's** stores — brand-specific values are called out where they differ.
-> Run by 888 IT (Wendy's) or NOC IT (Conti's) via RDP into the store server.
-> Last updated: 11 May 2026.
+> Step-by-step guide for installing and testing the CXS data collector on a Wendy's store server.
+> This is run by 888 IT via RDP into the store server.
+> Last updated: 16 Apr 2026.
 
 ## What This Does
 
-A PowerShell script runs on the store server, queries the local LS Central / NAV SQL Server for yesterday's transaction data, and sends it as JSON over HTTPS to the CXS collector API. A Windows Scheduled Task runs the script automatically at 02:00 every night.
+A PowerShell script runs on the store server, queries the local LS Central SQL Server for yesterday's transaction data, and sends it as JSON over HTTPS to the CXS collector API. A Windows Scheduled Task runs the script automatically at 02:00 every night.
 
 No VPN, no firewall changes, no inbound ports — outbound HTTPS only.
-
-### Brand differences in one table
-
-| Aspect | Wendy's | Conti's (NOC) |
-|---|---|---|
-| Table format | LS Central extension: `[<Company>$LSC <Table>$<GUID>]` | NAV/legacy: `[<Company>$<Table>]` |
-| `Brand` flag | `wendys` (default) | `contis` |
-| `Company` | `WENDYS PH` (default) | `NOC` |
-| `ExtGuid` | Wendy's UAT GUID (default) | `""` (empty triggers NAV format) |
-| `OracleCode` | Numeric mapping (e.g. `4058`) | Not used — pass empty or omit |
-| Topology | One DB per store (per-store agent) | One DB per store today; multi-store HO is a separate path (not yet shipped) |
 
 ---
 
@@ -29,26 +18,22 @@ Before starting, confirm:
 
 - [ ] RDP access to the store server
 - [ ] Windows Server with PowerShell 5.1+ or 7.x
-- [ ] SQL Server running with LS Central or NAV database
+- [ ] SQL Server running with LS Central database
 - [ ] Store server can reach the internet (outbound HTTPS port 443)
 - [ ] `*.insourcedata.org` is **whitelisted** on the network firewall (FortiGate blocks it as "Unrated" by default)
 - [ ] CXS API URL: `https://888.insourcedata.org/api/collect`
-- [ ] CXS API Key: `e208da46d44dcd96f4ff1732f85ed306`
+- [ ] CXS API Key: `065a4a89d962bfcb35ffa1bf757ac0f3d1b9276098b5514c207492cf333d3217`
 
 **Store config reference:**
 
-| Brand | Store | SqlServer | Database | StoreCode | OracleCode | Company / ExtGuid | Status |
-|---|---|---|---|---|---|---|---|
-| Wendy's | FTI Complex (UAT) | `ITLAB-SVR-AZ\np-master` | NEWPOS | DK003 | 4058 | `WENDYS PH` / Wendy's UAT GUID | Verified |
-| Wendy's | SM Marilao | `localhost` | WSMOD8 | S059 | 4020 | `WENDYS PH` / Wendy's UAT GUID | Pending |
-| Wendy's | (other prod stores) | `localhost` | varies | varies | varies | `WENDYS PH` / verify per store | Pending |
-| Conti's | NOCSST | `SSTSERVER` | NOCSSTDB | NOCSST | — | `NOC` / `""` (NAV) | Verified |
-| Conti's | NOCNVL | `NVLSERVER` | NOCNVLDB | NOCNVL | — | `NOC` / `""` (NAV) | Pending |
-| Conti's | (other NOC stores) | varies | varies | varies | — | `NOC` / `""` (NAV) | Pending |
+| Store | SqlServer | Database | StoreCode | OracleCode | Status |
+|-------|-----------|----------|-----------|------------|--------|
+| FTI Complex (UAT) | `ITLAB-SVR-AZ\np-master` | NEWPOS | DK003 | 4058 | Verified |
+| SM Marilao | `localhost` | WSMOD8 | S059 | 4020 | Pending SQL reachability test |
+| Cubao | TBD | TBD | S002 | TBD | Pending 888 IT info |
+| SM Clark | TBD | TBD | S085 | TBD | Pending 888 IT info |
 
 > **Note:** The `install-cxs-collector.ps1` script handles all config — it copies `cxs-collector.ps1` to `C:\CXS\`, rewrites the `$Config` block with the store-specific values you pass as parameters, and registers the scheduled task. No manual editing of the script needed.
->
-> **Finding `Company` and `ExtGuid` for a new brand/instance.** In SSMS, expand `Databases → <LSCentralDB> → Tables`. Look for table names matching the LS pattern (`<Company>$LSC <Table>$<GUID>`) or the NAV pattern (`<Company>$<Table>`). Everything before `$` is the `Company`, the GUID suffix (if present) is `ExtGuid`. Empty `ExtGuid` for NAV-style instances.
 
 ---
 
@@ -113,43 +98,26 @@ Returns `True`.
 ## Step 5: Verify Config Values
 
 ```powershell
-Select-String -Path "C:\CXS\cxs-collector.ps1" -Pattern "SqlServer|Database|Brand|Company|ExtGuid|StoreCode|OracleCode" | Select-Object -First 7
+Select-String -Path "C:\CXS\cxs-collector.ps1" -Pattern "SqlServer|Database|StoreCode|OracleCode" | Select-Object -First 4
 ```
 
-**Validate — Wendy's:** Should show (values vary per store):
+**Validate:** Should show:
 ```
 SqlServer  = "ITLAB-SVR-AZ\np-master"
 Database   = "NEWPOS"
-Brand      = "wendys"
-Company    = "WENDYS PH"
-ExtGuid    = "5ecfc871-5d82-43f1-9c54-59685e82318d"
 StoreCode  = "DK003"
 OracleCode = "4058"
 ```
 
-**Validate — Conti's:** Should show:
-```
-SqlServer  = "SSTSERVER"
-Database   = "NOCSSTDB"
-Brand      = "contis"
-Company    = "NOC"
-ExtGuid    = ""
-StoreCode  = "NOCSST"
-OracleCode = ""
-```
-
-If any value is wrong, open `C:\CXS\cxs-collector.ps1` in Notepad and edit the `$Config` block. Empty `ExtGuid` for Conti's NAV is intentional — see the brand differences table at the top.
+If values are wrong, open `C:\CXS\cxs-collector.ps1` in Notepad and edit the `$Config` block.
 
 ---
 
 ## Step 6: Test SQL Server Connection
 
-Set `$server` and `$database` to match your store's `$Config`, then:
-
 ```powershell
-# Replace with this store's values:
-$server   = "ITLAB-SVR-AZ\np-master"   # Wendy's example; for Conti's NOCSST use "SSTSERVER"
-$database = "NEWPOS"                   # Wendy's example; for Conti's NOCSST use "NOCSSTDB"
+$server = "ITLAB-SVR-AZ\np-master"
+$database = "NEWPOS"
 
 $connString = "Server=$server;Database=$database;Integrated Security=True;TrustServerCertificate=True;"
 $conn = New-Object System.Data.SqlClient.SqlConnection($connString)
@@ -158,56 +126,31 @@ Write-Host "SQL Server connection: OK ($server / $database)" -ForegroundColor Gr
 $conn.Close()
 ```
 
-**Validate:** Output is `SQL Server connection: OK ($server / $database)`.
+**Validate:** You see:
+```
+SQL Server connection: OK (ITLAB-SVR-AZ\np-master / NEWPOS)
+```
 
-If it fails, try `Server=localhost\<instance>` or the machine's actual hostname. For Wendy's UAT specifically: `localhost\np-master` or `EIGHT8ATE\np-master`.
+If it fails, try: `Server=localhost\np-master` or `Server=EIGHT8ATE\np-master`
 
 **Stop here if this fails.**
 
 ---
 
-## Step 7: Test the LS Central / NAV Tables Exist
-
-The query differs by table format. Run the block that matches the store's brand.
-
-### 7a. Wendy's (LS Central extension format)
+## Step 7: Test LS Central Tables Exist
 
 ```powershell
-$company  = "WENDYS PH"
-$extGuid  = "5ecfc871-5d82-43f1-9c54-59685e82318d"   # update if this store uses a different GUID
-$tableName = "[$company`$LSC Transaction Header`$$extGuid]"
-
 $connString = "Server=$server;Database=$database;Integrated Security=True;TrustServerCertificate=True;"
 $conn = New-Object System.Data.SqlClient.SqlConnection($connString)
 $conn.Open()
 $cmd = $conn.CreateCommand()
-$cmd.CommandText = "SELECT COUNT(*) FROM $tableName WHERE [Date] > '2026-03-01'"
+$cmd.CommandText = "SELECT COUNT(*) FROM [WENDYS PH`$LSC Transaction Header`$5ecfc871-5d82-43f1-9c54-59685e82318d] WHERE [Date] > '2026-03-01'"
 $count = $cmd.ExecuteScalar()
 Write-Host "Transaction rows since Mar 1: $count" -ForegroundColor Green
 $conn.Close()
 ```
 
-**Validate:** Number > 0 (Wendy's UAT has ~18,997 total rows).
-
-### 7b. Conti's (NAV format — no GUID, no `$LSC`)
-
-```powershell
-$company   = "NOC"
-$tableName = "[$company`$Transaction Header]"
-
-$connString = "Server=$server;Database=$database;Integrated Security=True;TrustServerCertificate=True;"
-$conn = New-Object System.Data.SqlClient.SqlConnection($connString)
-$conn.Open()
-$cmd = $conn.CreateCommand()
-$cmd.CommandText = "SELECT COUNT(*) FROM $tableName WHERE [Date] > '2026-03-01'"
-$count = $cmd.ExecuteScalar()
-Write-Host "Transaction rows since Mar 1: $count" -ForegroundColor Green
-$conn.Close()
-```
-
-**Validate:** Number > 0.
-
-If the query errors with "Invalid object name", the `Company` value is wrong or the instance uses the other table format. In SSMS, browse the database's `Tables` folder and read the actual prefix from a table called `<Company>$Transaction Header` or `<Company>$LSC Transaction Header$<GUID>`.
+**Validate:** Number > 0 (UAT has ~18,997 total rows).
 
 **Stop here if this fails.**
 
@@ -227,14 +170,14 @@ Test-NetConnection 888.insourcedata.org -Port 443
 **8b. HTTPS health check (PowerShell 7):**
 
 ```powershell
-$h = @{ "Authorization" = "Bearer e208da46d44dcd96f4ff1732f85ed306" }
+$h = @{ "Authorization" = "Bearer 065a4a89d962bfcb35ffa1bf757ac0f3d1b9276098b5514c207492cf333d3217" }
 Invoke-WebRequest -Uri "https://888.insourcedata.org/api/collect/health" -Method GET -Headers $h -TimeoutSec 30 -SkipCertificateCheck
 ```
 
 **Or with curl (works in both PS5.1 and PS7):**
 
 ```powershell
-curl.exe -k https://888.insourcedata.org/api/collect/health -H "Authorization: Bearer e208da46d44dcd96f4ff1732f85ed306"
+curl.exe -k https://888.insourcedata.org/api/collect/health -H "Authorization: Bearer 065a4a89d962bfcb35ffa1bf757ac0f3d1b9276098b5514c207492cf333d3217"
 ```
 
 **Validate:** Returns `{"status":"ok"}` with Status 200.
@@ -289,7 +232,7 @@ Both modes are **idempotent** — safe to re-run. If the data already exists, du
 ## Step 10: Verify Data Arrived on CXS Side
 
 ```powershell
-$h = @{ "Authorization" = "Bearer e208da46d44dcd96f4ff1732f85ed306" }
+$h = @{ "Authorization" = "Bearer 065a4a89d962bfcb35ffa1bf757ac0f3d1b9276098b5514c207492cf333d3217" }
 Invoke-RestMethod -Uri "https://888.insourcedata.org/api/collect/status" -Method GET -Headers $h -SkipCertificateCheck
 ```
 
@@ -304,9 +247,7 @@ If `failed` increased, notify Arshath with the store code and timestamp.
 
 ## Step 11: Cross-Check Transaction Counts
 
-Run in SSMS on the store server for the same date range. Use the query that matches the store's table format.
-
-**Wendy's (LS Central extension format):**
+Run in SSMS on the store server for the same date range:
 
 ```sql
 SELECT COUNT(*) as txn_count,
@@ -315,18 +256,6 @@ FROM [WENDYS PH$LSC Transaction Header$5ecfc871-5d82-43f1-9c54-59685e82318d]
 WHERE [Transaction Type] = 2
 AND [Date] > '2026-04-01'
 ```
-
-**Conti's (NAV format):**
-
-```sql
-SELECT COUNT(*) as txn_count,
-       SUM([Net Amount]) as total_net
-FROM [NOC$Transaction Header]
-WHERE [Transaction Type] = 2
-AND [Date] > '2026-04-01'
-```
-
-> Replace the table name with the store's actual `Company` / `ExtGuid` from Step 5 if they differ.
 
 **Validate:**
 - [ ] `txn_count` approximately matches the `headers: N rows` from Step 9
@@ -461,11 +390,7 @@ powershell -ExecutionPolicy Bypass -File "C:\CXS\install-cxs-collector.ps1" `
 
 ### 13b. Conti's Store
 
-Conti's NOC database uses the older NAV-format table names (`[NOC$Transaction Header]`) instead of the LS Central extension format Wendy's uses (`[<Company>$LSC <Table>$<GUID>]`). Three additional flags switch the agent into NAV mode and tag payloads as `contis` so the server-side processor uses the right caches and normalisers:
-
-- `-Brand "contis"` — sent in every payload; selects the Conti's outlet/product/tender caches server-side
-- `-Company "NOC"` — the table-name prefix (everything before `$` in `NOC$Transaction Header`)
-- `-ExtGuid ""` — empty string triggers NAV-format table names (no `$LSC` infix, no GUID suffix)
+Conti's NOC database uses the older NAV-format table names (`[NOC$Transaction Header]`) instead of the LS Central extension format Wendy's uses (`[<Company>$LSC <Table>$<GUID>]`). Just pass `-Brand "contis"` — the installer fills in NOC-conventional `Company = "NOC"` and empty `ExtGuid` (which is what triggers NAV-format table names) automatically.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File "C:\CXS\install-cxs-collector.ps1" `
@@ -474,15 +399,12 @@ powershell -ExecutionPolicy Bypass -File "C:\CXS\install-cxs-collector.ps1" `
     -SqlServer  "SSTSERVER" `
     -Database   "NOCSSTDB" `
     -StoreCode  "NOCSST" `
-    -OracleCode "" `
-    -Brand      "contis" `
-    -Company    "NOC" `
-    -ExtGuid    ""
+    -Brand      "contis"
 ```
 
-> **Finding `Company` for a Conti's instance.** Open SSMS, switch to the LS Central database, expand `Tables`, and look at any name like `<Prefix>$Transaction Header`. The prefix is your `Company` value. For NOC it's `NOC`; other Conti's environments may differ.
+> **Override the defaults only when needed.** If the Conti's instance has a non-`NOC` company prefix or uses LS Central extension tables instead of NAV, pass `-Company "<their-prefix>"` and/or `-ExtGuid "<their-guid>"` explicitly. The brand-driven defaults are `Company = "NOC"` and `ExtGuid = ""` for `contis`.
 >
-> **If a Conti's instance turns out to use LS Central extension tables** (e.g. `NOC$LSC Transaction Header$<guid>`), pass that GUID via `-ExtGuid` instead of `""`. The agent picks the right format based on whether `ExtGuid` is empty.
+> **Finding the right values.** Open SSMS, switch to the LS Central database, expand `Tables`, look at any name like `<Prefix>$Transaction Header` (NAV format) or `<Prefix>$LSC Transaction Header$<GUID>` (LS Central format). The prefix is `Company`; the GUID (if present) is `ExtGuid`.
 
 ### Custom sync time (either brand)
 

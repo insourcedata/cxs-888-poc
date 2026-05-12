@@ -87,15 +87,34 @@ param(
     [ValidateSet("wendys", "contis")]
     [string]$Brand = "wendys",
 
+    # Company and ExtGuid default from the Brand below. Pass them explicitly to
+    # override (e.g. a Conti's environment whose company prefix is not "NOC",
+    # or a Wendy's install that uses a different LS Central extension GUID).
     [Parameter(Mandatory=$false)]
-    [string]$Company = "WENDYS PH",
+    [string]$Company,
 
     # ExtGuid empty string => NAV-format table names (Conti's NOC).
     # AllowEmptyString is required because [string] params silently reject "" by default.
     [Parameter(Mandatory=$false)]
     [AllowEmptyString()]
-    [string]$ExtGuid = "5ecfc871-5d82-43f1-9c54-59685e82318d"
+    [string]$ExtGuid
 )
+
+# --- Brand-driven defaults -------------------------------------------------------
+# Each brand has its conventional Company and ExtGuid. The user can override either
+# by passing -Company / -ExtGuid explicitly; otherwise they pick up these defaults.
+
+$BrandDefaults = @{
+    wendys = @{ Company = "WENDYS PH"; ExtGuid = "5ecfc871-5d82-43f1-9c54-59685e82318d" }
+    contis = @{ Company = "NOC";       ExtGuid = "" }
+}
+
+if (-not $PSBoundParameters.ContainsKey('Company')) {
+    $Company = $BrandDefaults[$Brand].Company
+}
+if (-not $PSBoundParameters.ContainsKey('ExtGuid')) {
+    $ExtGuid = $BrandDefaults[$Brand].ExtGuid
+}
 
 $InstallDir = "C:\CXS"
 $ScriptName = "cxs-collector-$StoreCode.ps1"
