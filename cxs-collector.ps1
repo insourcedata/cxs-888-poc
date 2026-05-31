@@ -29,7 +29,8 @@
     Must be supplied together with -StartDate.
 
 .EXAMPLE
-    # Daily sync - runs by scheduled task at 02:00, queries yesterday only
+    # Daily sync - runs by scheduled task at the brand-default time
+    # (Wendy's 05:00, Conti's 02:00 per MOM 2026-05-20). Queries yesterday only.
     .\cxs-collector.ps1
 
 .EXAMPLE
@@ -52,42 +53,67 @@ param(
 )
 
 # --- Configuration --------------------------------------------------------------
-# These are set per-store during installation
+# Defaults — non-sensitive values only. The API key and per-store fields
+# (StoreCode, OracleCode, SqlServer, etc.) MUST be provisioned via the
+# cxs-agent.json config file at install time. The file is gitignored.
 
 $Config = @{
     # CXS collector endpoint
     ApiUrl     = "https://888.insourcedata.org/api/collect"
-    ApiKey     = "065a4a89d962bfcb35ffa1bf757ac0f3d1b9276098b5514c207492cf333d3217"
+    ApiKey     = ""                           # MUST come from config file or $env:CXS_API_KEY
 
     # SQL Server - Windows Auth, no password needed
-    SqlServer  = "ITLAB-SVR-AZ\np-master"    # UAT server
-    Database   = "NEWPOS"                    # UAT database
+    SqlServer  = ""                           # per-store
+    Database   = "NEWPOS"
 
     # Brand - "wendys" or "contis". Picks the right caches/normalisers
-    # server-side when the payload lands. Required field; sent in every POST.
-    Brand      = "wendys"
+    # server-side when the payload lands. REQUIRED — must be set in the
+    # per-store config file. The default is intentionally empty (was
+    # "wendys" until 2026-05-26) so a Conti's install that copy-pasted
+    # the Wendy's config can't silently misfile its data; the validation
+    # block below hard-fails the script if Brand is unset or unknown.
+    Brand      = ""
 
     # LS Central table identifiers - vary by brand/installation
     Company    = "WENDYS PH"
     ExtGuid    = "5ecfc871-5d82-43f1-9c54-59685e82318d"
 
     # Store identifier
-    StoreCode  = "DK003"                     # FTI Complex (UAT)
-    OracleCode = "4058"                      # FTI Complex (UAT)
+    StoreCode  = ""                           # per-store
+    OracleCode = ""                           # per-store
 
     # Log file
     LogFile    = "C:\CXS\logs\sync.log"
+
+    # Cert handling — opt-in trust-all, off by default
+    AllowSelfSignedCert = $false
 }
+
+# Merge config file values over defaults
+$ConfigFile = if ($env:CXS_CONFIG_FILE) { $env:CXS_CONFIG_FILE } else { "C:\CXS\config\cxs-agent.json" }
+if (Test-Path $ConfigFile) {
+    try {
+        $fileConfig = Get-Content $ConfigFile -Raw | ConvertFrom-Json
+        foreach ($prop in $fileConfig.PSObject.Properties) {
+            $Config[$prop.Name] = $prop.Value
+        }
+    } catch {
+        Write-Host "ERROR: Failed to parse config file ${ConfigFile}: $_" -ForegroundColor Red
+        exit 1
+    }
+}
+
+if ($env:CXS_API_KEY) { $Config.ApiKey = $env:CXS_API_KEY }
 
 # --- TLS setup -----------------------------------------------------------------
 # Force TLS 1.2 (PowerShell 5.1 defaults to TLS 1.0 which most servers reject)
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-# Accept all certificates - works around PartialChain errors on servers
-# that are missing Cloudflare root/intermediate CA certificates.
-# This is safe for this use case: we authenticate via API key, not certificate.
-if (-not ([System.Management.Automation.PSTypeName]'TrustAllCertsPolicy').Type) {
-    Add-Type @"
+# Cert validation is ON by default. AllowSelfSignedCert is an explicit
+# escape hatch for installs whose root-CA store is missing Cloudflare's chain.
+if ($Config.AllowSelfSignedCert) {
+    if (-not ([System.Management.Automation.PSTypeName]'TrustAllCertsPolicy').Type) {
+        Add-Type @"
 using System.Net;
 using System.Security.Cryptography.X509Certificates;
 public class TrustAllCertsPolicy : ICertificatePolicy {
@@ -96,8 +122,10 @@ public class TrustAllCertsPolicy : ICertificatePolicy {
         WebRequest request, int certificateProblem) { return true; }
 }
 "@
+    }
+    [System.Net.ServicePointManager]::CertificatePolicy = New-Object TrustAllCertsPolicy
+    Write-Host "WARN: AllowSelfSignedCert=true — TLS certificate validation is DISABLED." -ForegroundColor Yellow
 }
-[System.Net.ServicePointManager]::CertificatePolicy = New-Object TrustAllCertsPolicy
 
 # --- Agent version ----------------------------------------------------------------
 $AgentVersion = "2.0"
@@ -187,12 +215,18 @@ function Send-Checkin {
         $checkin.taskExists = $null
     }
 
-    # Last 5 lines of sync log
+    # Last 5 lines of sync log — sanitised to strip connection strings,
+    # credentials, and Authorization headers before shipping over the wire.
     if (Test-Path $Config.LogFile) {
         try {
-            $checkin.syncLogTail = (Get-Content $Config.LogFile -Tail 5) -join "`n"
+            $tail = (Get-Content $Config.LogFile -Tail 5) -join "`n"
+            $tail = $tail -replace '(?i)(Server|Database|User Id|Password)\s*=\s*[^;]*;?', '$1=***;'
+            $tail = $tail -replace '(?i)Authorization\s*:\s*Bearer\s+\S+', 'Authorization: Bearer ***'
+            $checkin.syncLogTail = $tail
         }
-        catch {}
+        catch {
+            Write-Log "  [checkin] Failed to read log tail: $_"
+        }
     }
 
     if ($ErrorMessage) {
@@ -216,11 +250,36 @@ function Send-Checkin {
 }
 
 # --- Validate config -----------------------------------------------------------
-if (-not $Config.ApiUrl -or -not $Config.ApiKey -or $Config.ApiUrl -match "CHANGE_ME" -or $Config.ApiKey -eq "CHANGE_ME") {
-    Write-Host "ERROR: ApiUrl or ApiKey is missing or still has placeholder values." -ForegroundColor Red
-    Write-Host "Edit the `$Config block at the top of this script, or run install-cxs-collector.ps1." -ForegroundColor Red
+if (-not $Config.ApiUrl -or $Config.ApiUrl -match "CHANGE_ME") {
+    Write-Host "ERROR: ApiUrl is missing or still has placeholder values." -ForegroundColor Red
+    Write-Host "Set ApiUrl in ${ConfigFile}." -ForegroundColor Red
     exit 1
 }
+if (-not $Config.ApiKey -or $Config.ApiKey.Length -lt 16) {
+    Write-Host "ERROR: ApiKey is missing or too short. Set it in ${ConfigFile} or $env:CXS_API_KEY." -ForegroundColor Red
+    exit 1
+}
+if (-not $Config.StoreCode -or -not $Config.SqlServer) {
+    Write-Host "ERROR: StoreCode and SqlServer must be set in ${ConfigFile}." -ForegroundColor Red
+    exit 1
+}
+# Brand must be explicit. The collector-side fallback ("wendys" if
+# missing) is being retired — agents must declare their brand at
+# install time so a misconfigured store never silently misfiles its
+# data under the wrong brand's outlets.
+$KnownBrands = @("wendys", "contis")
+if (-not $Config.Brand) {
+    Write-Host "ERROR: Brand is missing. Set it to one of: $($KnownBrands -join ', ') in ${ConfigFile}." -ForegroundColor Red
+    exit 1
+}
+$BrandNormalized = $Config.Brand.ToString().Trim().ToLower()
+if ($KnownBrands -notcontains $BrandNormalized) {
+    Write-Host "ERROR: Brand '$($Config.Brand)' is not recognised. Must be one of: $($KnownBrands -join ', '). Update ${ConfigFile}." -ForegroundColor Red
+    exit 1
+}
+# Persist the normalized form so every downstream payload + checkin
+# carries the canonical lowercase value.
+$Config.Brand = $BrandNormalized
 
 # Validate param pairing - backfill needs both or neither
 if (($StartDate -and -not $EndDate) -or ($EndDate -and -not $StartDate)) {
@@ -273,7 +332,18 @@ function Get-TableFullName {
 # Returns $true on success (HTTP 200), $false on any failure.
 
 function Invoke-DaySync {
-    param([string]$Day)
+    param(
+        [string]$Day,
+        # "daily" — Scheduled-Task run with no args; collector cross-
+        # checks each row's transactionDate against syncDate and flags
+        # rows that fall outside a tolerance window.
+        # "backfill" — operator deliberately ran -StartDate/-EndDate;
+        # collector skips the cross-check (the date range is intentional).
+        [ValidateSet("daily", "backfill")]
+        [string]$Mode
+    )
+
+    $syncStart = Get-Date
 
     $connString = "Server=$($Config.SqlServer);Database=$($Config.Database);Integrated Security=True;TrustServerCertificate=True;"
 
@@ -282,10 +352,13 @@ function Invoke-DaySync {
         storeCode  = $Config.StoreCode
         oracleCode = $Config.OracleCode
         syncDate   = $Day
+        mode       = $Mode
         tables     = @{}
     }
 
     $totalRows = 0
+    $skippedRows = 0
+    $skipReasons = @{}
 
     foreach ($table in $Tables) {
         $fullName = Get-TableFullName -TableName $table.Name
@@ -339,6 +412,31 @@ function Invoke-DaySync {
 
     if ($totalRows -eq 0) {
         Write-Log "  [$Day] no rows - skipping POST"
+
+        # The only Phase 1 skip type. Row-level skip detection (null txn
+        # number, zero amount, etc.) is deferred to Phase 2 — when added,
+        # increment $skippedRows + push to $skipReasons inside the row loop
+        # above. Until then the dashboard's "skipped" column is only
+        # populated for no_data days, which is what the user sees.
+        if (-not $skipReasons["no_data"]) { $skipReasons["no_data"] = @{ reason = "no_data"; count = 0; sampleRows = @() } }
+        $skipReasons["no_data"].count++
+
+        # Still emit the sync summary so the heartbeat agent reports the
+        # no-data day, not yesterday's stale row.
+        $summaryDir = Split-Path $Config.LogFile -Parent | Split-Path -Parent | Join-Path -ChildPath "state"
+        if (-not (Test-Path $summaryDir)) { New-Item -ItemType Directory -Path $summaryDir -Force | Out-Null }
+        $summary = @{
+            syncDate              = $Day
+            rowsSent              = 0
+            rowsSkipped           = $skippedRows
+            rowsFailed            = 0
+            skipReasons           = @($skipReasons.Values)
+            processingWindowStart = $syncStart.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            processingWindowEnd   = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            durationMs            = [int]((Get-Date) - $syncStart).TotalMilliseconds
+        }
+        $summary | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $summaryDir "last-sync.json") -Force
+
         return $true  # empty day is a "success" - don't want to block the backfill loop
     }
 
@@ -356,6 +454,22 @@ function Invoke-DaySync {
         $response = Invoke-RestMethod -Uri $Config.ApiUrl -Method POST -Body $json -Headers $headers -TimeoutSec 120
 
         Write-Log "  [$Day] POST ok: $($response.status)"
+
+        # Write sync summary for heartbeat agent
+        $summaryDir = Split-Path $Config.LogFile -Parent | Split-Path -Parent | Join-Path -ChildPath "state"
+        if (-not (Test-Path $summaryDir)) { New-Item -ItemType Directory -Path $summaryDir -Force | Out-Null }
+        $summary = @{
+            syncDate                = $Day
+            rowsSent                = $totalRows
+            rowsSkipped             = $skippedRows
+            rowsFailed              = 0
+            skipReasons             = @($skipReasons.Values)
+            processingWindowStart   = $syncStart.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            processingWindowEnd     = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            durationMs              = [int]((Get-Date) - $syncStart).TotalMilliseconds
+        }
+        $summary | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $summaryDir "last-sync.json") -Force
+
         return $true
     }
     catch {
@@ -374,7 +488,10 @@ function Invoke-Sync {
     # Pre-flight telemetry
     Send-Checkin -Event "sync_start"
 
-    # Figure out which days to sync
+    # Figure out which days to sync. $SyncMode is sent in every payload
+    # so the collector knows whether to enforce transactionDate-vs-
+    # syncDate tolerance (daily) or skip the check (backfill — the
+    # operator deliberately chose the date range).
     if ($StartDate) {
         # Backfill mode
         try {
@@ -398,12 +515,14 @@ function Invoke-Sync {
             $cursor = $cursor.AddDays(1)
         }
 
+        $SyncMode = "backfill"
         Write-Log "Mode: BACKFILL - $($days.Count) day(s) from $StartDate to $EndDate"
     }
     else {
         # Daily sync mode - yesterday only
         $yesterday = (Get-Date).Date.AddDays(-1).ToString("yyyy-MM-dd")
         $days = @($yesterday)
+        $SyncMode = "daily"
         Write-Log "Mode: DAILY - syncing yesterday ($yesterday)"
     }
 
@@ -411,7 +530,7 @@ function Invoke-Sync {
     $succeeded = 0
     $failed    = $null
     foreach ($day in $days) {
-        $ok = Invoke-DaySync -Day $day
+        $ok = Invoke-DaySync -Day $day -Mode $SyncMode
         if (-not $ok) {
             $failed = $day
             break

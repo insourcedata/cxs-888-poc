@@ -22,7 +22,7 @@ Before starting, confirm:
 - [ ] Store server can reach the internet (outbound HTTPS port 443)
 - [ ] `*.insourcedata.org` is **whitelisted** on the network firewall (FortiGate blocks it as "Unrated" by default)
 - [ ] CXS API URL: `https://888.insourcedata.org/api/collect`
-- [ ] CXS API Key: `065a4a89d962bfcb35ffa1bf757ac0f3d1b9276098b5514c207492cf333d3217`
+- [ ] CXS API Key: `<YOUR_COLLECTOR_API_KEY>`
 
 **Store config reference:**
 
@@ -86,9 +86,7 @@ You can copy via:
 **Validate:**
 
 ```powershell
-Test-Path "C:\CXS\cxs-collector.ps1"   # template file
-# Or after running installer:
-Test-Path "C:\CXS\cxs-collector-{StoreCode}.ps1"  # per-store installed copy
+Test-Path "C:\CXS\cxs-collector.ps1"
 ```
 
 Returns `True`.
@@ -170,14 +168,14 @@ Test-NetConnection 888.insourcedata.org -Port 443
 **8b. HTTPS health check (PowerShell 7):**
 
 ```powershell
-$h = @{ "Authorization" = "Bearer 065a4a89d962bfcb35ffa1bf757ac0f3d1b9276098b5514c207492cf333d3217" }
+$h = @{ "Authorization" = "Bearer <YOUR_COLLECTOR_API_KEY>" }
 Invoke-WebRequest -Uri "https://888.insourcedata.org/api/collect/health" -Method GET -Headers $h -TimeoutSec 30 -SkipCertificateCheck
 ```
 
 **Or with curl (works in both PS5.1 and PS7):**
 
 ```powershell
-curl.exe -k https://888.insourcedata.org/api/collect/health -H "Authorization: Bearer 065a4a89d962bfcb35ffa1bf757ac0f3d1b9276098b5514c207492cf333d3217"
+curl.exe -k https://888.insourcedata.org/api/collect/health -H "Authorization: Bearer <YOUR_COLLECTOR_API_KEY>"
 ```
 
 **Validate:** Returns `{"status":"ok"}` with Status 200.
@@ -202,17 +200,17 @@ The script has two modes:
 **Mode 1 — Daily (no arguments).** Queries yesterday only. This is what the scheduled task runs every night.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector-{StoreCode}.ps1"
+powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector.ps1"
 ```
 
 **Mode 2 — Backfill (`-StartDate` / `-EndDate`).** Walks a date range one day at a time, one POST per day. Use this for historical data or to re-sync a specific date.
 
 ```powershell
 # Sync a single specific date
-powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector-{StoreCode}.ps1" -StartDate "2026-04-10" -EndDate "2026-04-10"
+powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector.ps1" -StartDate "2026-04-10" -EndDate "2026-04-10"
 
 # Sync a range (e.g. all of March)
-powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector-{StoreCode}.ps1" -StartDate "2026-03-01" -EndDate "2026-03-31"
+powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector.ps1" -StartDate "2026-03-01" -EndDate "2026-03-31"
 ```
 
 Both modes are **idempotent** — safe to re-run. If the data already exists, duplicates are skipped.
@@ -232,7 +230,7 @@ Both modes are **idempotent** — safe to re-run. If the data already exists, du
 ## Step 10: Verify Data Arrived on CXS Side
 
 ```powershell
-$h = @{ "Authorization" = "Bearer 065a4a89d962bfcb35ffa1bf757ac0f3d1b9276098b5514c207492cf333d3217" }
+$h = @{ "Authorization" = "Bearer <YOUR_COLLECTOR_API_KEY>" }
 Invoke-RestMethod -Uri "https://888.insourcedata.org/api/collect/status" -Method GET -Headers $h -SkipCertificateCheck
 ```
 
@@ -355,9 +353,7 @@ If this returns `POST ok: accepted`, the scheduled task will work the next morni
 
 ## Step 13: Install Scheduled Task (Automated Daily Sync)
 
-Once the manual test in Step 9 passes **and SYSTEM has SQL access (Step 12)**, register the Windows Scheduled Task. The installer copies `cxs-collector.ps1` to `C:\CXS\cxs-collector-{StoreCode}.ps1`, injects the per-store config via regex-replace, sends a telemetry checkin to the collector, and registers a task called `CXS Daily Sync - {StoreCode}` that runs daily at 02:00 as `SYSTEM` with 3 retries on failure.
-
-> **Multi-store support:** Each store gets its own script, task, and log file. Multiple stores on the same server no longer overwrite each other.
+Once the manual test in Step 9 passes **and SYSTEM has SQL access (Step 12)**, register the Windows Scheduled Task. The installer copies a fresh `cxs-collector.ps1` to `C:\CXS\`, injects the per-store config into the `$Config` block via regex-replace, tests SQL + API connectivity once, and registers a task called `CXS Daily Sync` that runs daily at 02:00 as `SYSTEM` with 3 retries on failure.
 
 Pick the section that matches the store you're installing on.
 
@@ -370,7 +366,7 @@ Wendy's stores use the LS Central extension table format. `Brand`, `Company`, an
 ```powershell
 powershell -ExecutionPolicy Bypass -File "C:\CXS\install-cxs-collector.ps1" `
     -ApiUrl     "https://888.insourcedata.org/api/collect" `
-    -ApiKey     "e208da46d44dcd96f4ff1732f85ed306" `
+    -ApiKey     "<YOUR_COLLECTOR_API_KEY>" `
     -SqlServer  "ITLAB-SVR-AZ\np-master" `
     -Database   "NEWPOS" `
     -StoreCode  "DK003" `
@@ -382,7 +378,7 @@ powershell -ExecutionPolicy Bypass -File "C:\CXS\install-cxs-collector.ps1" `
 ```powershell
 powershell -ExecutionPolicy Bypass -File "C:\CXS\install-cxs-collector.ps1" `
     -ApiUrl     "https://888.insourcedata.org/api/collect" `
-    -ApiKey     "e208da46d44dcd96f4ff1732f85ed306" `
+    -ApiKey     "<YOUR_COLLECTOR_API_KEY>" `
     -Database   "WSMOD8" `
     -StoreCode  "S059" `
     -OracleCode "4020"
@@ -395,7 +391,7 @@ Conti's NOC database uses the older NAV-format table names (`[NOC$Transaction He
 ```powershell
 powershell -ExecutionPolicy Bypass -File "C:\CXS\install-cxs-collector.ps1" `
     -ApiUrl     "https://888.insourcedata.org/api/collect" `
-    -ApiKey     "e208da46d44dcd96f4ff1732f85ed306" `
+    -ApiKey     "<YOUR_COLLECTOR_API_KEY>" `
     -SqlServer  "SSTSERVER" `
     -Database   "NOCSSTDB" `
     -StoreCode  "NOCSST" `
@@ -414,7 +410,7 @@ Default is 02:00 AM. Add `-SyncTime` to stagger or pick a different hour. Both W
 # Sync at 3:30 AM instead of 2:00 AM
 powershell -ExecutionPolicy Bypass -File "C:\CXS\install-cxs-collector.ps1" `
     -ApiUrl     "https://888.insourcedata.org/api/collect" `
-    -ApiKey     "e208da46d44dcd96f4ff1732f85ed306" `
+    -ApiKey     "<YOUR_COLLECTOR_API_KEY>" `
     -Database   "WSMOD8" `
     -StoreCode  "S059" `
     -OracleCode "4020" `
@@ -424,8 +420,7 @@ powershell -ExecutionPolicy Bypass -File "C:\CXS\install-cxs-collector.ps1" `
 ### Validate (PowerShell — same check for both brands)
 
 ```powershell
-# Replace StoreCode with the actual store code (e.g. "CXS Daily Sync - S059")
-$task = Get-ScheduledTask -TaskName "CXS Daily Sync - S059" -ErrorAction SilentlyContinue
+$task = Get-ScheduledTask -TaskName "CXS Daily Sync" -ErrorAction SilentlyContinue
 if ($task) {
     $info = $task | Get-ScheduledTaskInfo
     Write-Host "Task Name:    $($task.TaskName)" -ForegroundColor Green
@@ -457,10 +452,10 @@ if ($task) {
 
 ## Step 14: Verify Automated Run (Next Day)
 
-The morning after installation, check the log for the 02:00 run (replace `{StoreCode}` with the actual store code):
+The morning after installation, check the log for the 02:00 run:
 
 ```powershell
-Get-Content "C:\CXS\logs\sync-{StoreCode}.log" -Tail 30
+Get-Content C:\CXS\logs\sync.log -Tail 30
 ```
 
 **Validate:**
@@ -471,35 +466,11 @@ Get-Content "C:\CXS\logs\sync-{StoreCode}.log" -Tail 30
 If the log doesn't show a 02:00 run:
 
 ```powershell
-Get-ScheduledTask -TaskName "CXS Daily Sync - {StoreCode}" | Get-ScheduledTaskInfo | Select-Object LastRunTime, LastTaskResult
+Get-ScheduledTask -TaskName "CXS Daily Sync" | Get-ScheduledTaskInfo | Select-Object LastRunTime, LastTaskResult
 ```
 
 - `LastTaskResult` of `0` = success
-- Any other value = failure (check `C:\CXS\logs\sync-{StoreCode}.log`)
-
----
-
-## Updating Existing Installs
-
-If a store already has an older version installed, use the update script to patch it without re-running the full installer. The updater reads the existing config, writes the new script version with the same config, and optionally migrates to per-store format.
-
-Copy `cxs-collector.ps1` (new version) and `update-cxs-collector.ps1` to the store server, then run:
-
-```powershell
-# Update in-place (preserves config, adds telemetry)
-powershell -ExecutionPolicy Bypass -File "C:\CXS\update-cxs-collector.ps1"
-
-# If multiple stores on same server, also migrate legacy single-file to per-store format
-powershell -ExecutionPolicy Bypass -File "C:\CXS\update-cxs-collector.ps1" -Migrate
-```
-
-**What `-Migrate` does:**
-- Renames `C:\CXS\cxs-collector.ps1` → `C:\CXS\cxs-collector-{StoreCode}.ps1`
-- Renames task `CXS Daily Sync` → `CXS Daily Sync - {StoreCode}`
-- Sets log to `C:\CXS\logs\sync-{StoreCode}.log`
-- Preserves existing trigger time and settings
-
-Safe to run multiple times. Does not touch scheduled task timing.
+- Any other value = failure (check `C:\CXS\logs\sync.log`)
 
 ---
 
@@ -542,9 +513,7 @@ Windows Servers may be missing Cloudflare's root CA certificates. Symptoms:
 
 ## Logs Location
 
-Logs are written per-store to `C:\CXS\logs\sync-{StoreCode}.log` (e.g. `sync-S059.log`). Share this file with CXS (Arshath) if troubleshooting is needed.
-
-> Legacy installs (before v2.0) wrote to `C:\CXS\logs\sync.log`. The update script migrates to per-store logs.
+All logs are written to `C:\CXS\logs\sync.log`. Share this file with CXS (Arshath) if troubleshooting is needed.
 
 ---
 
@@ -554,15 +523,11 @@ After setup, the store server should have:
 
 ```
 C:\CXS\
-├── cxs-collector-S059.ps1         # Main sync script (per-store, pre-configured)
-├── install-cxs-collector.ps1      # Installer (run once during setup)
-├── update-cxs-collector.ps1       # Updater (patches installed scripts to latest version)
-├── cxs-collector.ps1              # Source template (used by installer and updater)
+├── cxs-collector.ps1          # Main sync script (pre-configured for this store)
+├── install-cxs-collector.ps1  # Installer for scheduled task (run once during setup)
 └── logs\
-    └── sync-S059.log              # Per-store sync log (appended to daily)
+    └── sync.log               # Sync logs (appended to daily)
 ```
-
-> Multiple stores on the same server each get their own `cxs-collector-{StoreCode}.ps1` and `sync-{StoreCode}.log`.
 
 ---
 
@@ -572,13 +537,11 @@ Once the scheduled task is installed, the store server automatically syncs data 
 
 ### What happens at 02:00
 
-1. Windows Task Scheduler runs `cxs-collector-{StoreCode}.ps1` as SYSTEM
-2. The script sends a **telemetry checkin** to the collector (system info, SQL connectivity, disk/RAM/CPU — viewable in the admin dashboard under "Agent health")
-3. The script queries LS Central for **yesterday's** transactions (headers + sales + payments)
-4. Builds a JSON payload and POSTs it to `https://888.insourcedata.org/api/collect`
-5. The CXS collector receives, validates, and inserts the data into PostgreSQL
-6. If the transaction already exists (re-run), it's skipped — no duplicates
-7. On completion (or failure), a final checkin is sent with the result
+1. Windows Task Scheduler runs `cxs-collector.ps1` as SYSTEM
+2. The script queries LS Central for **yesterday's** transactions (headers + sales + payments)
+3. Builds a JSON payload and POSTs it to `https://888.insourcedata.org/api/collect`
+4. The CXS collector receives, validates, and inserts the data into PostgreSQL
+5. If the transaction already exists (re-run), it's skipped — no duplicates
 
 The script is **stateless** — it always queries yesterday. No state files, no cursors, no "how far back" logic.
 
@@ -587,11 +550,11 @@ The script is **stateless** — it always queries yesterday. No state files, no 
 **On the store server** (RDP in, check the log):
 
 ```powershell
-# Last 30 lines of the log (replace StoreCode)
-Get-Content "C:\CXS\logs\sync-S059.log" -Tail 30
+# Last 30 lines of the log
+Get-Content C:\CXS\logs\sync.log -Tail 30
 
-# Check last run time and result (replace StoreCode)
-Get-ScheduledTask -TaskName "CXS Daily Sync - S059" | Get-ScheduledTaskInfo | Select-Object LastRunTime, LastTaskResult
+# Check last run time and result
+Get-ScheduledTask -TaskName "CXS Daily Sync" | Get-ScheduledTaskInfo | Select-Object LastRunTime, LastTaskResult
 ```
 
 - `LastTaskResult = 0` means success
@@ -609,10 +572,10 @@ The failed day won't be automatically retried. To fill the gap, RDP into the sto
 
 ```powershell
 # Replay a single missed day
-powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector-{StoreCode}.ps1" -StartDate "2026-04-14" -EndDate "2026-04-14"
+powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector.ps1" -StartDate "2026-04-14" -EndDate "2026-04-14"
 
 # Replay a range of missed days
-powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector-{StoreCode}.ps1" -StartDate "2026-04-14" -EndDate "2026-04-16"
+powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector.ps1" -StartDate "2026-04-14" -EndDate "2026-04-16"
 ```
 
 Safe to re-run even if the day partially succeeded — duplicate transactions are skipped automatically.
@@ -623,7 +586,7 @@ For a new store that needs months of historical data loaded:
 
 ```powershell
 # Backfill all of Q1 2026 (walks day by day, one POST per day)
-powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector-{StoreCode}.ps1" -StartDate "2026-01-01" -EndDate "2026-03-31"
+powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector.ps1" -StartDate "2026-01-01" -EndDate "2026-03-31"
 ```
 
 If any day fails mid-backfill, the script stops and prints the exact command to resume from the failed day.
@@ -636,4 +599,4 @@ If any day fails mid-backfill, the script stops and prints the exact command to 
 | `ERROR posting` in log | Network/API issue | Run Step 8 diagnostics (DNS → TCP → HTTPS) |
 | `ERROR querying` in log | SQL Server down or unreachable | Check SQL Server service is running |
 | Log shows success but no data on dashboard | Empty day (no transactions yesterday) | Normal — check a day you know has data |
-| Task shows `LastTaskResult = 1` | Script exited with error | Read the full log: `Get-Content "C:\CXS\logs\sync-{StoreCode}.log"` |
+| Task shows `LastTaskResult = 1` | Script exited with error | Read the full log: `Get-Content C:\CXS\logs\sync.log` |

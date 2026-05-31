@@ -56,7 +56,36 @@ Write-Host "Found $($scripts.Count) installed script(s):" -ForegroundColor Green
 $scripts | ForEach-Object { Write-Host "  $_" }
 Write-Host ""
 
+# The v2 heartbeat agent uses a single config (C:\CXS\config\cxs-agent.json) and a
+# single agent script per machine. If this box hosts more than one store, each
+# per-store heartbeat task would overwrite that one config — only the last store
+# processed would report correctly. Warn loudly rather than silently misconfigure.
+if ($scripts.Count -gt 1) {
+    Write-Host "[WARN] Multiple store collector scripts detected on this machine." -ForegroundColor Yellow
+    Write-Host "[WARN] The v2 heartbeat agent supports ONE store identity per machine; the" -ForegroundColor Yellow
+    Write-Host "[WARN] last store processed will own cxs-agent.json. For multi-store servers," -ForegroundColor Yellow
+    Write-Host "[WARN] contact support before relying on heartbeats/remote commands." -ForegroundColor Yellow
+    Write-Host ""
+}
+
 $newContent = Get-Content $SourceScript -Raw
+New-Item -ItemType Directory -Path "$InstallDir\config" -Force | Out-Null
+
+# Deploy the heartbeat agent BEFORE registering/starting its scheduled task.
+# Previously this copy ran AFTER the per-store loop, so a first upgrade started
+# the task pointing at a cxs-agent.ps1 that didn't exist yet (it would error and
+# only retry on the task's restart policy). Copy first; if the source is missing,
+# skip the heartbeat task entirely rather than start a task that launches nothing.
+$agentSource = Join-Path $PSScriptRoot "cxs-agent.ps1"
+$agentDeployed = $false
+if (Test-Path $agentSource) {
+    Copy-Item $agentSource (Join-Path $InstallDir "cxs-agent.ps1") -Force
+    Write-Host "[OK] Agent script deployed: $InstallDir\cxs-agent.ps1" -ForegroundColor Green
+    $agentDeployed = $true
+} else {
+    Write-Host "[WARN] cxs-agent.ps1 not found in $PSScriptRoot - heartbeat agent will NOT be deployed or started" -ForegroundColor Yellow
+}
+Write-Host ""
 
 foreach ($scriptPath in $scripts) {
     $fileName = Split-Path $scriptPath -Leaf
@@ -149,8 +178,102 @@ foreach ($scriptPath in $scripts) {
             Write-Host "  [OK] Task '$taskName' action updated" -ForegroundColor Green
         }
     }
+
+    # Write agent config from extracted values
+    $agentCfg = @{}
+    $agentKeys = @("ApiUrl", "ApiKey", "SqlServer", "Database", "Brand", "Company", "StoreCode")
+    foreach ($key in $agentKeys) {
+        if ($configValues.ContainsKey($key)) {
+            $agentCfg[$key] = $configValues[$key]
+        }
+    }
+    $agentConfigPath = Join-Path $InstallDir "config\cxs-agent.json"
+    # Preserve AllowSelfSignedCert from the existing agent config. It is an
+    # agent-only setting (not present in the collector script we extract from),
+    # so regenerating the config from collector values alone would silently drop
+    # it and re-enable TLS validation on stores that opted into the bypass.
+    if (Test-Path $agentConfigPath) {
+        try {
+            $existingAgentCfg = Get-Content $agentConfigPath -Raw | ConvertFrom-Json
+            if ($null -ne $existingAgentCfg.AllowSelfSignedCert) {
+                $agentCfg["AllowSelfSignedCert"] = [bool]$existingAgentCfg.AllowSelfSignedCert
+            }
+        } catch {
+            Write-Host "  [WARN] Could not read existing cxs-agent.json to preserve AllowSelfSignedCert: $_" -ForegroundColor Yellow
+        }
+    }
+    $agentCfg | ConvertTo-Json -Depth 5 | Set-Content -Path $agentConfigPath -Encoding UTF8
+    Write-Host "  [OK] Agent config written for $storeCode`: $agentConfigPath" -ForegroundColor Green
+
+    # Register heartbeat task (idempotent) — only if the agent was deployed,
+    # otherwise we'd start a task that launches a non-existent script.
+    if (-not $agentDeployed) {
+        Write-Host "  [WARN] Skipping heartbeat task for $storeCode (cxs-agent.ps1 not deployed)" -ForegroundColor Yellow
+        continue
+    }
+    $hbTaskName = "CXS Agent Heartbeat - $storeCode"
+    $existingHb = Get-ScheduledTask -TaskName $hbTaskName -ErrorAction SilentlyContinue
+    if ($existingHb) {
+        Stop-ScheduledTask -TaskName $hbTaskName -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskName $hbTaskName -Confirm:$false
+        Write-Host "  Removed existing heartbeat task: $hbTaskName"
+    }
+
+    $hbAction = New-ScheduledTaskAction `
+        -Execute "powershell.exe" `
+        -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$InstallDir\cxs-agent.ps1`"" `
+        -WorkingDirectory $InstallDir
+
+    $hbTrigger = New-ScheduledTaskTrigger -AtStartup
+
+    $hbPrincipal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+
+    $hbSettings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable `
+        -RestartCount 3 `
+        -RestartInterval (New-TimeSpan -Minutes 10)
+
+    Register-ScheduledTask `
+        -TaskName $hbTaskName `
+        -Action $hbAction `
+        -Trigger $hbTrigger `
+        -Principal $hbPrincipal `
+        -Settings $hbSettings `
+        -Description "CXS Agent - heartbeat and command execution for $storeCode" | Out-Null
+
+    Start-ScheduledTask -TaskName $hbTaskName
+    Write-Host "  [OK] Heartbeat task created and started: $hbTaskName" -ForegroundColor Green
 }
 
+# Remove legacy fleet-wide "CXS Daily Sync" task if a per-store replacement exists.
+# The bare task (no " - <StoreCode>" suffix) was created by v1 installs and causes
+# duplicate nightly payloads when running alongside the new per-store task.
+# Guard: only remove if at least one per-store "CXS Daily Sync - *" task is
+# registered, so a pure-legacy install (no per-store task yet) keeps working.
+# The -Migrate path above already handles its own removal (with settings-preserving
+# rename), so this block is a no-op in that case — the bare task is already gone.
+$legacyBareTask = Get-ScheduledTask -TaskName "CXS Daily Sync" -ErrorAction SilentlyContinue |
+                  Where-Object { $_.TaskName -eq "CXS Daily Sync" }
+if ($legacyBareTask) {
+    $perStoreReplacement = Get-ScheduledTask -TaskName "CXS Daily Sync - *" -ErrorAction SilentlyContinue
+    if ($perStoreReplacement) {
+        Unregister-ScheduledTask -TaskName "CXS Daily Sync" -Confirm:$false
+        Write-Host "  [OK] Removed legacy fleet-wide task 'CXS Daily Sync' (per-store replacement exists)" -ForegroundColor Yellow
+    }
+}
+
+# Copy command handler scripts
+$commandsSrc = Join-Path $PSScriptRoot "commands"
+$commandsDst = Join-Path $InstallDir "commands"
+if (Test-Path $commandsSrc) {
+    if (-not (Test-Path $commandsDst)) { New-Item -ItemType Directory -Path $commandsDst | Out-Null }
+    Copy-Item "$commandsSrc\*.ps1" $commandsDst -Force
+    Write-Host "  [OK] Command handlers updated in: $commandsDst" -ForegroundColor Green
+}
+
+# (heartbeat agent is deployed before the loop now — see $agentDeployed above)
 Write-Host ""
 Write-Host "=== Update Complete ===" -ForegroundColor Cyan
 Write-Host ""
