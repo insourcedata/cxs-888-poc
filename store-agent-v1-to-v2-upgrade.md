@@ -67,9 +67,30 @@ This determines whether you need the `-Migrate` flag in step 3.
 
 ## 2. Pull the updated files onto the store box
 
-Copy the **entire** `scripts/poc-extraction/store-agent/` folder to
-the store machine. The updater needs these files in its working
-directory (`$PSScriptRoot`):
+### 2a. Download the files from the repo (the safe way)
+
+Download the `cxs-888-poc` repo as a ZIP - do **not** copy/paste the
+script text into Notepad/Word/email. Pasting re-encodes the files and
+breaks them ("Unexpected token" errors when you run them). A ZIP download
+keeps every file exact.
+
+1. On GitHub, open the `cxs-888-poc` repo.
+2. Click the green **Code** button -> **Download ZIP**.
+3. Unzip it. Inside is a folder called **`files-to-copy`** - that holds
+   all the scripts you need.
+
+### 2b. Put the files on the store machine (in a temp folder, NOT C:\CXS)
+
+Copy the whole **`files-to-copy`** folder onto the store machine as
+**`C:\Temp\store-agent`** (so you have
+`C:\Temp\store-agent\update-cxs-collector.ps1`, etc.).
+
+> **Do NOT copy the files into `C:\CXS`.** Running the updater from inside
+> `C:\CXS` makes it copy files onto themselves and throws errors. Always
+> run it from a separate folder like `C:\Temp\store-agent`; it writes what
+> it needs into `C:\CXS` for you.
+
+The folder must contain all of these (the updater needs them together):
 
 | File / folder | Purpose |
 |---|---|
@@ -82,12 +103,34 @@ directory (`$PSScriptRoot`):
 > if `cxs-collector.ps1` is missing from the same directory, and the
 > heartbeat agent and command handlers will not be deployed.
 
+### 2c. Do NOT delete or change the old files in C:\CXS
+
+> **This is the step that has broken stores.** Leave everything already in
+> `C:\CXS` exactly as it is. The updater **reads your existing API key and
+> config out of the old `C:\CXS\cxs-collector*.ps1`** to carry it into v2.
+> If you delete or overwrite those old files first, the API key and store
+> settings are gone and the agent cannot be configured.
+>
+> The updater removes and renames the old files **itself** as part of the
+> migration. Your only job is to put the new files in `C:\Temp\store-agent`
+> and run the updater - it handles the rest.
+
 ---
 
 ## 3. Run the updater
 
 Open an **elevated** PowerShell prompt (Run as Administrator), then
-`cd` to the folder where you placed the files.
+`cd` to the folder where you placed the files and allow scripts to run
+for this session:
+
+```powershell
+cd C:\Temp\store-agent
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+```
+
+(`-Scope Process` only affects this PowerShell window and reverts when you
+close it - nothing permanent changes on the box. Without it you may get a
+"not digitally signed" error.)
 
 **If you have a legacy single-file install (v1a):**
 
