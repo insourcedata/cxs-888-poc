@@ -1,4 +1,4 @@
-# Invoke-ReSync.ps1 — Queues a re-sync for specified date range.
+# Invoke-ReSync.ps1 - Queues a re-sync for specified date range.
 # NOTE: This spawns cxs-collector.ps1 in background and returns immediately.
 # The command row will show "completed" meaning "spawn succeeded", not "sync finished".
 # Actual sync progress is visible via lastSync in subsequent heartbeats.
@@ -29,7 +29,7 @@ if (($endDt - $startDt).TotalDays -gt $MaxRangeDays) {
     throw "re-sync range cannot exceed $MaxRangeDays days."
 }
 
-# Spawn cxs-collector in background — don't await
+# Spawn cxs-collector in background - don't await
 # Installer writes store-specific scripts as cxs-collector-{StoreCode}.ps1
 $scriptDir = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 $collectorPath = Join-Path $scriptDir "cxs-collector-$($Config.StoreCode).ps1"

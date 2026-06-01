@@ -1,4 +1,4 @@
-# Get-Config.ps1 — Returns current agent config (sensitive fields redacted)
+# Get-Config.ps1 - Returns current agent config (sensitive fields redacted)
 param($Params, $Config)
 
 return @{

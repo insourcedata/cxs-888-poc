@@ -31,12 +31,12 @@
 .PARAMETER SyncTime
     The daily sync time in HH:mmAM/PM format (e.g. "5:00AM", "2:00AM").
     If omitted, defaults by brand per the May 2026 alignment:
-      Wendy's → 5:00AM (24-hour stores close out the previous day)
-      Conti's → 2:00AM (existing schedule)
+      Wendy's -> 5:00AM (24-hour stores close out the previous day)
+      Conti's -> 2:00AM (existing schedule)
     Pass -SyncTime explicitly to override.
 
 .PARAMETER Brand
-    REQUIRED. The brand for this install: "wendys" or "contis". No default —
+    REQUIRED. The brand for this install: "wendys" or "contis". No default -
     the installer will prompt (interactive) or fail (non-interactive) if
     omitted, so a copy-pasted Conti's install can't silently land as Wendy's.
 
@@ -88,7 +88,7 @@ param(
     [Parameter(Mandatory=$true)]
     [string]$StoreCode,
 
-    # OracleCode is metadata only — Wendy's uses it (e.g. 4058), Conti's doesn't.
+    # OracleCode is metadata only - Wendy's uses it (e.g. 4058), Conti's doesn't.
     # Non-mandatory + AllowEmptyString so Conti's installs can pass "" or omit.
     [Parameter(Mandatory=$false)]
     [AllowEmptyString()]
@@ -99,7 +99,7 @@ param(
     [Parameter(Mandatory=$false)]
     [string]$SyncTime = "",
 
-    # Brand is REQUIRED — no default. Was defaulting to "wendys" until
+    # Brand is REQUIRED - no default. Was defaulting to "wendys" until
     # 2026-05-26; retired because the installer is run manually by IT
     # and a copy-pasted Conti's install with a forgotten -Brand flag
     # would silently provision the agent as Wendy's. Now PowerShell
@@ -122,7 +122,7 @@ param(
 
     # TLS certificate validation is ON by default. Pass -AllowSelfSignedCert to
     # disable cert checks for stores whose root-CA store is missing the issuer
-    # chain (e.g. Cloudflare). Never enable unless strictly required — disabling
+    # chain (e.g. Cloudflare). Never enable unless strictly required - disabling
     # TLS validation exposes the bearer token to MITM interception.
     [switch]$AllowSelfSignedCert
 )
@@ -239,7 +239,7 @@ public class TrustAllCertsPolicy : ICertificatePolicy {
 "@
     }
     [System.Net.ServicePointManager]::CertificatePolicy = New-Object TrustAllCertsPolicy
-    Write-Host "WARN: AllowSelfSignedCert — TLS certificate validation is DISABLED." -ForegroundColor Yellow
+    Write-Host "WARN: AllowSelfSignedCert - TLS certificate validation is DISABLED." -ForegroundColor Yellow
 }
 
 $checkin = @{
@@ -289,7 +289,7 @@ try {
     }
 }
 catch {
-    # Don't swallow silently — surface the table check failure (was an empty catch).
+    # Don't swallow silently - surface the table check failure (was an empty catch).
     Write-Host "  [WARN] Could not verify transaction tables: $($_.Exception.Message)" -ForegroundColor Yellow
 }
 

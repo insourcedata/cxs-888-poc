@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    CXS Agent Heartbeat — sends periodic health + sync telemetry to the fleet dashboard.
+    CXS Agent Heartbeat - sends periodic health + sync telemetry to the fleet dashboard.
 
 .DESCRIPTION
     Runs as a persistent process (registered as a Windows scheduled task with
@@ -9,7 +9,7 @@
     connectivity, task scheduler state, and last sync summary, then POSTs to
     the collector's /api/collect/heartbeat endpoint.
 
-    This script does NOT perform data syncs — cxs-collector.ps1 handles that
+    This script does NOT perform data syncs - cxs-collector.ps1 handles that
     separately. This script reports on the sync's outcomes.
 
 .NOTES
@@ -20,12 +20,12 @@
 Set-StrictMode -Version Latest
 
 # --- Configuration ---------------------------------------------------------------
-# Defaults — non-sensitive values only. Per-store overrides (and the API key)
+# Defaults - non-sensitive values only. Per-store overrides (and the API key)
 # live in cxs-agent.json, which is gitignored and provisioned at install time.
 $Config = @{
     ApiUrl              = "https://888.insourcedata.org/api/collect"
     ApiKey              = ""        # MUST come from config file or $env:CXS_API_KEY
-    # Brand is REQUIRED — must be set in cxs-agent.json. Was "wendys"
+    # Brand is REQUIRED - must be set in cxs-agent.json. Was "wendys"
     # by default until 2026-05-26; retired so Conti's installs that
     # copy-pasted the Wendy's config can't silently misfile heartbeats.
     Brand               = ""
@@ -56,7 +56,7 @@ if (Test-Path $ConfigFile) {
 # Allow $env:CXS_API_KEY to override (for local testing / containerised installs)
 if ($env:CXS_API_KEY) { $Config.ApiKey = $env:CXS_API_KEY }
 
-# Validate required fields — fail fast rather than booting with placeholders
+# Validate required fields - fail fast rather than booting with placeholders
 if (-not $Config.ApiKey -or $Config.ApiKey.Length -lt 16) {
     Write-Host "ERROR: ApiKey is missing or too short. Set it in ${ConfigFile} or $env:CXS_API_KEY." -ForegroundColor Red
     exit 1
@@ -65,7 +65,7 @@ if (-not $Config.StoreCode) {
     Write-Host "ERROR: StoreCode is missing. Set it in ${ConfigFile}." -ForegroundColor Red
     exit 1
 }
-# Brand must be explicit — mirrors the same check in cxs-collector.ps1
+# Brand must be explicit - mirrors the same check in cxs-collector.ps1
 # so a misconfigured agent fails the same way for both processes.
 $KnownBrands = @("wendys", "contis")
 if (-not $Config.Brand) {
@@ -87,7 +87,7 @@ $AgentId = "$($Config.Brand):$($Config.StoreCode)"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 # Cert validation is ON by default. AllowSelfSignedCert is an explicit opt-in
-# escape hatch for stores whose root-CA store is missing Cloudflare's chain —
+# escape hatch for stores whose root-CA store is missing Cloudflare's chain -
 # see install runbook. Never enable globally.
 if ($Config.AllowSelfSignedCert) {
     if (-not ([System.Management.Automation.PSTypeName]'TrustAllCertsPolicy').Type) {
@@ -102,7 +102,7 @@ public class TrustAllCertsPolicy : ICertificatePolicy {
 "@
     }
     [System.Net.ServicePointManager]::CertificatePolicy = New-Object TrustAllCertsPolicy
-    Write-Host "WARN: AllowSelfSignedCert=true — TLS certificate validation is DISABLED." -ForegroundColor Yellow
+    Write-Host "WARN: AllowSelfSignedCert=true - TLS certificate validation is DISABLED." -ForegroundColor Yellow
 }
 
 # --- Logging ---------------------------------------------------------------------
@@ -353,7 +353,7 @@ public class TrustAllCertsPolicy : ICertificatePolicy {
         $finished = $job | Wait-Job -Timeout $timeoutSec
 
         if ($null -eq $finished) {
-            # Timeout — the job is still running; force-stop it.
+            # Timeout - the job is still running; force-stop it.
             $stopwatch.Stop()
             $job | Stop-Job -PassThru | Remove-Job -Force
             $errorMsg = "Command timed out after ${timeoutSec}s"
@@ -362,7 +362,7 @@ public class TrustAllCertsPolicy : ICertificatePolicy {
             return
         }
 
-        # Job completed (success or failure) — collect output.
+        # Job completed (success or failure) - collect output.
         $stopwatch.Stop()
 
         if ($finished.State -eq 'Failed') {
@@ -382,7 +382,7 @@ public class TrustAllCertsPolicy : ICertificatePolicy {
         # the in-memory config actually updates for subsequent heartbeats.
         # Guard uses .updated (dot-access) rather than -is [hashtable] because
         # Start-Job deserializes hashtables as PSCustomObject across the
-        # process boundary — dot-access works on both types.
+        # process boundary - dot-access works on both types.
         if ($commandType -eq 'update-config' -and $null -ne $result -and $result.updated) {
             $Config[[string]$result.key] = $result.newValue
         }
@@ -477,7 +477,7 @@ while ($true) {
         Write-AgentLog "Backing off ${base}s after $ConsecutiveFailures consecutive failures." -Level "WARN"
     }
 
-    # ±10% jitter so 800 stores rebooting at the same time don't synchronize
+    # ?10% jitter so 800 stores rebooting at the same time don't synchronize
     # their heartbeats and pile up on the collector.
     $jitter = Get-Random -Minimum (-[int]($base * 0.1)) -Maximum ([int]($base * 0.1))
     Start-Sleep -Seconds ($base + $jitter)

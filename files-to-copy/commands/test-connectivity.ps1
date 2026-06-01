@@ -1,4 +1,4 @@
-# Test-Connectivity.ps1 — Tests SQL Server and collector endpoint reachability
+# Test-Connectivity.ps1 - Tests SQL Server and collector endpoint reachability
 param($Params, $Config)
 
 $result = @{ sql = @{}; collector = @{} }
@@ -20,7 +20,7 @@ try {
     $result.sql = @{ connected = $false; latencyMs = $sw.ElapsedMilliseconds; error = $_.Exception.Message }
 }
 
-# Test collector — use GET on the base /api/collect URL (any non-POST returns 405 or 200,
+# Test collector - use GET on the base /api/collect URL (any non-POST returns 405 or 200,
 # confirming the server is reachable without triggering actual data processing)
 try {
     $sw = [System.Diagnostics.Stopwatch]::StartNew()

@@ -53,7 +53,7 @@ param(
 )
 
 # --- Configuration --------------------------------------------------------------
-# Defaults — non-sensitive values only. The API key and per-store fields
+# Defaults - non-sensitive values only. The API key and per-store fields
 # (StoreCode, OracleCode, SqlServer, etc.) MUST be provisioned via the
 # cxs-agent.json config file at install time. The file is gitignored.
 
@@ -67,7 +67,7 @@ $Config = @{
     Database   = "NEWPOS"
 
     # Brand - "wendys" or "contis". Picks the right caches/normalisers
-    # server-side when the payload lands. REQUIRED — must be set in the
+    # server-side when the payload lands. REQUIRED - must be set in the
     # per-store config file. The default is intentionally empty (was
     # "wendys" until 2026-05-26) so a Conti's install that copy-pasted
     # the Wendy's config can't silently misfile its data; the validation
@@ -85,7 +85,7 @@ $Config = @{
     # Log file
     LogFile    = "C:\CXS\logs\sync.log"
 
-    # Cert handling — opt-in trust-all, off by default
+    # Cert handling - opt-in trust-all, off by default
     AllowSelfSignedCert = $false
 }
 
@@ -124,7 +124,7 @@ public class TrustAllCertsPolicy : ICertificatePolicy {
 "@
     }
     [System.Net.ServicePointManager]::CertificatePolicy = New-Object TrustAllCertsPolicy
-    Write-Host "WARN: AllowSelfSignedCert=true — TLS certificate validation is DISABLED." -ForegroundColor Yellow
+    Write-Host "WARN: AllowSelfSignedCert=true - TLS certificate validation is DISABLED." -ForegroundColor Yellow
 }
 
 # --- Agent version ----------------------------------------------------------------
@@ -215,7 +215,7 @@ function Send-Checkin {
         $checkin.taskExists = $null
     }
 
-    # Last 5 lines of sync log — sanitised to strip connection strings,
+    # Last 5 lines of sync log - sanitised to strip connection strings,
     # credentials, and Authorization headers before shipping over the wire.
     if (Test-Path $Config.LogFile) {
         try {
@@ -233,7 +233,7 @@ function Send-Checkin {
         $checkin.errorMessage = $ErrorMessage
     }
 
-    # Send checkin — best-effort, don't block sync on telemetry failure
+    # Send checkin - best-effort, don't block sync on telemetry failure
     try {
         $json = $checkin | ConvertTo-Json -Depth 5 -Compress
         $hdrs = @{
@@ -264,7 +264,7 @@ if (-not $Config.StoreCode -or -not $Config.SqlServer) {
     exit 1
 }
 # Brand must be explicit. The collector-side fallback ("wendys" if
-# missing) is being retired — agents must declare their brand at
+# missing) is being retired - agents must declare their brand at
 # install time so a misconfigured store never silently misfiles its
 # data under the wrong brand's outlets.
 $KnownBrands = @("wendys", "contis")
@@ -334,10 +334,10 @@ function Get-TableFullName {
 function Invoke-DaySync {
     param(
         [string]$Day,
-        # "daily" — Scheduled-Task run with no args; collector cross-
+        # "daily" - Scheduled-Task run with no args; collector cross-
         # checks each row's transactionDate against syncDate and flags
         # rows that fall outside a tolerance window.
-        # "backfill" — operator deliberately ran -StartDate/-EndDate;
+        # "backfill" - operator deliberately ran -StartDate/-EndDate;
         # collector skips the cross-check (the date range is intentional).
         [ValidateSet("daily", "backfill")]
         [string]$Mode
@@ -414,7 +414,7 @@ function Invoke-DaySync {
         Write-Log "  [$Day] no rows - skipping POST"
 
         # The only Phase 1 skip type. Row-level skip detection (null txn
-        # number, zero amount, etc.) is deferred to Phase 2 — when added,
+        # number, zero amount, etc.) is deferred to Phase 2 - when added,
         # increment $skippedRows + push to $skipReasons inside the row loop
         # above. Until then the dashboard's "skipped" column is only
         # populated for no_data days, which is what the user sees.
@@ -490,7 +490,7 @@ function Invoke-Sync {
 
     # Figure out which days to sync. $SyncMode is sent in every payload
     # so the collector knows whether to enforce transactionDate-vs-
-    # syncDate tolerance (daily) or skip the check (backfill — the
+    # syncDate tolerance (daily) or skip the check (backfill - the
     # operator deliberately chose the date range).
     if ($StartDate) {
         # Backfill mode

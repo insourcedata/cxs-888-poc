@@ -1,5 +1,5 @@
-# Update-Config.ps1 — Updates agent config in memory (restricted to safe keys).
-# NOTE: Change is in-memory only — persists until agent restarts, then reverts
+# Update-Config.ps1 - Updates agent config in memory (restricted to safe keys).
+# NOTE: Change is in-memory only - persists until agent restarts, then reverts
 # to hardcoded $Config values.
 param($Params, $Config)
 

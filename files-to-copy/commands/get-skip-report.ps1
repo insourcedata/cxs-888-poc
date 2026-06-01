@@ -1,4 +1,4 @@
-# Get-SkipReport.ps1 — Detailed skip breakdown for a specific sync date
+# Get-SkipReport.ps1 - Detailed skip breakdown for a specific sync date
 param($Params, $Config)
 
 $date = if ($Params -and $Params.PSObject.Properties['date']) { $Params.date } else { $null }

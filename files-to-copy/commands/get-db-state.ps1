@@ -1,4 +1,4 @@
-# Get-DbState.ps1 — Row counts for specified SQL tables
+# Get-DbState.ps1 - Row counts for specified SQL tables
 param($Params, $Config)
 
 $tables = if ($Params -and $Params.PSObject.Properties['tables'] -and $Params.tables) { $Params.tables } else {

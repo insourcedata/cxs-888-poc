@@ -1,4 +1,4 @@
-# Get-Logs.ps1 — Returns last N lines from agent log, sanitized
+# Get-Logs.ps1 - Returns last N lines from agent log, sanitized
 param($Params, $Config)
 
 $lines = if ($Params -and $Params.PSObject.Properties['lines'] -and $Params.lines) { [Math]::Min([int]$Params.lines, 500) } else { 100 }
@@ -16,7 +16,7 @@ $sanitizePatterns = @(
     '(?i)Bearer\s+\S+',
     '(?i)apikey\s*=\s*\S+',
     '(?i)connection\s*string\s*[:=]\s*.+',
-    # Redact any long hex/token-looking secret (API keys, hashes) generically —
+    # Redact any long hex/token-looking secret (API keys, hashes) generically -
     # do NOT hardcode a specific key prefix here (that itself leaks the key).
     '(?i)\b[0-9a-f]{32,}\b',
     '(?i)\b(?:tid|tsec)_[A-Za-z0-9_\-+]+'

@@ -1,69 +1,68 @@
-# Recovery B — re-provision a store whose config was wiped
+# Fix a store agent (start here)
 
-Use this when `C:\CXS\config\cxs-agent.json` is missing AND the collector
-scripts only have empty placeholders (no API key / StoreCode survived) —
-i.e. the box was reset by copying fresh files over the old ones and deleting
-the configured originals. The store has lost its identity + API key and must
-be re-provisioned with the **installer** (the `-Migrate` updater can't help —
-it only carries forward config from an already-configured install).
+Use this when a store has no `C:\CXS\config\cxs-agent.json` or the scripts
+won't run. Do the steps in order on the store server (PowerShell as Admin).
 
-Run on the store server (PowerShell as Administrator).
+The scripts in `files-to-copy/` are now plain text and won't get scrambled
+when copied. **Copy the whole folder** onto the server (drag the folder in
+RDP) - do NOT paste file contents one at a time.
 
-## 1. Stage the bundle outside C:\CXS
+---
 
-Running the installer from inside `C:\CXS` makes it copy files onto themselves
-("cannot overwrite with itself"). Stage it in a separate folder first.
+## Step 1 - Put the clean files on the server
 
-```powershell
-New-Item -ItemType Directory C:\Temp\store-agent -Force | Out-Null
-Copy-Item C:\CXS\cxs-collector.ps1,C:\CXS\cxs-agent.ps1,C:\CXS\install-cxs-collector.ps1 C:\Temp\store-agent
-Copy-Item C:\CXS\commands C:\Temp\store-agent -Recurse -Force
-```
+Copy the `files-to-copy` folder to the server as `C:\Temp\store-agent`.
+(So you end up with `C:\Temp\store-agent\install-cxs-collector.ps1`, etc.)
 
-## 2. Re-install with this store's real values
+## Step 2 - Install (fill in this store's details)
 
-The **API key is this store's per-store key** (from Arshath's records).
-Fill in every `<...>` placeholder. Drop `-OracleCode` for Conti's stores.
+Below is DK003 as the example. Change the values for other stores.
+The API key is this store's own key (from Arshath).
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "C:\Temp\store-agent\install-cxs-collector.ps1" `
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+
+C:\Temp\store-agent\install-cxs-collector.ps1 `
     -Brand      "wendys" `
     -ApiUrl     "https://888.insourcedata.org/api/collect" `
     -ApiKey     "<THIS STORE'S API KEY>" `
-    -SqlServer  "localhost" `
-    -Database   "<DB e.g. WSMOD8 / NEWPOS / NOCSSTDB>" `
-    -StoreCode  "<e.g. DK003>" `
-    -OracleCode "<e.g. 4058>"
+    -SqlServer  "WFTISERVER" `
+    -Database   "WFTIDB" `
+    -StoreCode  "DK003" `
+    -OracleCode "4058"
 ```
 
-The installer writes `config\cxs-agent.json`, creates `cxs-collector-<Store>.ps1`
-plus both scheduled tasks (`CXS Daily Sync - <Store>`, `CXS Agent Heartbeat - <Store>`),
-removes any legacy bare task, and starts the heartbeat.
+For a Conti's store: use `-Brand "contis"` and drop `-OracleCode`.
 
-## 3. Verify
+It should end with `=== Installation Complete ===`.
+
+## Step 3 - Check it worked
 
 ```powershell
-$cfg = Get-Content C:\CXS\config\cxs-agent.json -Raw | ConvertFrom-Json
-$sc  = $cfg.StoreCode
-Get-ScheduledTask -TaskName "CXS Daily Sync - $sc","CXS Agent Heartbeat - $sc" |
-  Select-Object TaskName, State, @{n='RunAs';e={$_.Principal.UserId}}
+$sc = (Get-Content C:\CXS\config\cxs-agent.json -Raw | ConvertFrom-Json).StoreCode
+Get-ScheduledTask -TaskName "CXS Daily Sync - $sc","CXS Agent Heartbeat - $sc" | Select-Object TaskName, State
 Start-Sleep 12
-Get-Content C:\CXS\logs\agent.log -Tail 10
+Get-Content C:\CXS\logs\agent.log -Tail 8
 ```
 
-Good:
-- `CXS Daily Sync - <Store>` = **Ready**, `CXS Agent Heartbeat - <Store>` = **Running**, both **RunAs SYSTEM**
-- `agent.log` shows `CXS Agent starting…` then `Heartbeat sent. SQL=True …`
-- Store appears in the dashboard: **Admin → Agent Fleet** (recent heartbeat) and **Admin → Store Syncs**
+You want to see:
+- Daily Sync task = **Ready**, Heartbeat task = **Running**
+- A line in the log like `Heartbeat sent. SQL=True ...`
+- The store shows up on the dashboard: **Admin -> Agent Fleet**
 
-If `agent.log` shows `SQL=False`, SYSTEM can't reach SQL Server — grant it
-`db_datareader` (see Step 12 in `poc-store-agent-setup.md`).
+If the log says `SQL=False`, SQL Server isn't letting the agent in - see
+Step 12 in `poc-store-agent-setup.md`.
 
-## 4. End-to-end sync test (optional but recommended)
+---
 
-```powershell
-powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector-$sc.ps1" -StartDate "2026-05-31" -EndDate "2026-05-31"
-```
+## Store details (fill in as you go)
 
-Expect `POST ok: accepted` and `=== CXS Sync Complete ===`, then confirm the
-day's data on **Admin → Store Syncs** in the dashboard.
+| Store | Brand | SqlServer | Database | StoreCode | OracleCode |
+|-------|-------|-----------|----------|-----------|------------|
+| FTI / DK003 | wendys | WFTISERVER | WFTIDB | DK003 | 4058 |
+|       |       |           |          |           |            |
+
+## Notes
+- Always copy the files to `C:\Temp\store-agent`, NOT into `C:\CXS`.
+  (Running from inside `C:\CXS` makes it copy files onto themselves.)
+- After fixing a store whose key was shown on screen, rotate that key.

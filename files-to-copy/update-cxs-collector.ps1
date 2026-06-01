@@ -58,7 +58,7 @@ Write-Host ""
 
 # The v2 heartbeat agent uses a single config (C:\CXS\config\cxs-agent.json) and a
 # single agent script per machine. If this box hosts more than one store, each
-# per-store heartbeat task would overwrite that one config — only the last store
+# per-store heartbeat task would overwrite that one config - only the last store
 # processed would report correctly. Warn loudly rather than silently misconfigure.
 if ($scripts.Count -gt 1) {
     Write-Host "[WARN] Multiple store collector scripts detected on this machine." -ForegroundColor Yellow
@@ -205,7 +205,7 @@ foreach ($scriptPath in $scripts) {
     $agentCfg | ConvertTo-Json -Depth 5 | Set-Content -Path $agentConfigPath -Encoding UTF8
     Write-Host "  [OK] Agent config written for $storeCode`: $agentConfigPath" -ForegroundColor Green
 
-    # Register heartbeat task (idempotent) — only if the agent was deployed,
+    # Register heartbeat task (idempotent) - only if the agent was deployed,
     # otherwise we'd start a task that launches a non-existent script.
     if (-not $agentDeployed) {
         Write-Host "  [WARN] Skipping heartbeat task for $storeCode (cxs-agent.ps1 not deployed)" -ForegroundColor Yellow
@@ -253,7 +253,7 @@ foreach ($scriptPath in $scripts) {
 # Guard: only remove if at least one per-store "CXS Daily Sync - *" task is
 # registered, so a pure-legacy install (no per-store task yet) keeps working.
 # The -Migrate path above already handles its own removal (with settings-preserving
-# rename), so this block is a no-op in that case — the bare task is already gone.
+# rename), so this block is a no-op in that case - the bare task is already gone.
 $legacyBareTask = Get-ScheduledTask -TaskName "CXS Daily Sync" -ErrorAction SilentlyContinue |
                   Where-Object { $_.TaskName -eq "CXS Daily Sync" }
 if ($legacyBareTask) {
@@ -273,7 +273,7 @@ if (Test-Path $commandsSrc) {
     Write-Host "  [OK] Command handlers updated in: $commandsDst" -ForegroundColor Green
 }
 
-# (heartbeat agent is deployed before the loop now — see $agentDeployed above)
+# (heartbeat agent is deployed before the loop now - see $agentDeployed above)
 Write-Host ""
 Write-Host "=== Update Complete ===" -ForegroundColor Cyan
 Write-Host ""
