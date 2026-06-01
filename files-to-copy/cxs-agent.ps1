@@ -287,7 +287,7 @@ function Send-Heartbeat {
 # --- Command executor ------------------------------------------------------------
 
 $ALLOWED_COMMANDS = @(
-    'get-logs', 'get-db-state', 're-sync', 'update-config',
+    'get-logs', 'get-db-state', 're-sync', 'update-config', 'set-sync-time',
     'get-config', 'test-connectivity', 'get-skip-report'
 )
 
