@@ -9,10 +9,16 @@ RDP) - do NOT paste file contents one at a time.
 
 ---
 
-## Step 1 - Put the clean files on the server
+## Step 1 - Get the clean files onto the server
 
-Copy the `files-to-copy` folder to the server as `C:\Temp\store-agent`.
-(So you end up with `C:\Temp\store-agent\install-cxs-collector.ps1`, etc.)
+1. Download the repo from GitHub: green **Code** button -> **Download ZIP**.
+   (Downloading keeps the files exact - this is the safe way.)
+2. Unzip it. Inside is a folder called **`files-to-copy`**.
+3. On the store server, copy that whole **`files-to-copy`** folder to
+   **`C:\Temp\store-agent`** (so you have
+   `C:\Temp\store-agent\install-cxs-collector.ps1`, etc.).
+
+Do NOT open the scripts in Word/Notepad to copy them - just copy the folder.
 
 ## Step 2 - Install (fill in this store's details)
 
