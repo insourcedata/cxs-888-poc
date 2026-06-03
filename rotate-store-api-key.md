@@ -58,10 +58,15 @@ rejected (401) and goes offline.
 
 ## Step 4 - Put the key in the store's config
 
-The config is one of these - use whichever one **exists**:
+The config is one of these:
 
 - `C:\CXS\config\cxs-agent-<STORECODE>.json`   (newer, per-store)
 - `C:\CXS\config\cxs-agent.json`                (older, single store)
+
+**If only one exists, use it. If BOTH exist** (e.g. after the multi-store
+upgrade), **always edit the per-store `cxs-agent-<STORECODE>.json`** - the old
+`cxs-agent.json` is left in place but is **no longer read**, so editing it
+changes nothing and the store will stay offline after you restart.
 
 Open it (replace `<STORECODE>`):
 
@@ -101,9 +106,11 @@ key. Each store is independent - one config file and one heartbeat task per stor
 ## If something looks wrong
 
 - **Offline, or 401 / Unauthorized**, right after Step 5: either we have not
-  loaded the key yet (go back to Step 3 and wait for our reply), **or** the key
-  was mistyped or has a stray space - re-open the config, carefully re-paste the
-  key exactly, save, and run the Step 5 commands again.
+  loaded the key yet (go back to Step 3 and wait for our reply), **or** you
+  edited the wrong file (if both configs exist, it must be the per-store
+  `cxs-agent-<STORECODE>.json`), **or** the key was mistyped or has a stray
+  space - re-open the correct config, carefully re-paste the key exactly, save,
+  and run the Step 5 commands again.
 - Still stuck: send us a screenshot of the config file (black out the key) and the
   dashboard. Do not keep retrying changes.
 
