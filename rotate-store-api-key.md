@@ -1,73 +1,95 @@
-# Update a Store's Collector Key (key rotation)
+# Generate and Apply a Store's Collector Key
 
-Use this when insourcedata sends you a **new collector key for a store**. We are
-moving each store onto its **own** key instead of the old shared one (more
-secure - a leaked key can no longer affect every store).
+We are moving each store onto its **own** collector key (more secure - a leaked
+key no longer affects every store). For each store you will: **generate a key on
+the store server, send it to us, wait for us to activate it, then apply it and
+restart the agent.**
 
-We do the hard parts (generating the keys and switching the server over). You do
-one small thing per store: put the new key on the store server and restart the
-agent.
-
-**There is no downtime.** The old key keeps working until we flip the switch on
-our side, so you can do these whenever convenient - just tell us when each store
-is done.
+**There is no downtime** - the old shared key keeps working until we switch over
+on our side. But the order below matters: **do not apply a new key until we
+confirm we have loaded it**, or that store gets rejected and shows offline.
 
 Do every step on the store server, in **PowerShell as Administrator**.
 
----
-
-## What you need from us (per store)
-
-- The **StoreCode** (e.g. `DK003`, `NOCSST`).
-- The **new key** for that store (a long random string).
-
-If you don't have both, stop and ask us before doing anything.
+> **Important:** Always generate the key with the command in Step 1. Do **not**
+> invent your own key, reuse a key, or shorten it - the command makes a strong,
+> unique key, and anything else is a security risk.
 
 ---
 
-## Step 1 - Open that store's config file
+## The order (per store)
 
-The config is one of these two files - use whichever one **exists** on the box:
+1. Generate a key on the box.
+2. Send us the StoreCode + key.
+3. **Wait** for us to reply "loaded".
+4. Put the key in the config.
+5. Restart the agent.
+6. Confirm online, tell us "done".
+
+Steps 4 and 5 must come **after** step 3.
+
+---
+
+## Step 1 - Generate the key
+
+Run this exactly (it prints one long random key):
+
+```powershell
+[Convert]::ToHexString([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(24))
+```
+
+Copy the **whole** output (48 characters). That is this store's new key.
+Generate a **separate** key for **each** store - never reuse one.
+
+## Step 2 - Send us the key
+
+Send us, for this store, over the secure channel we agreed:
+
+- the **StoreCode** (e.g. `DK003`, `NOCSST`)
+- the **key** you just generated
+
+Keep the key handy - you will paste it in Step 4. Do nothing else yet.
+
+## Step 3 - Wait for our "loaded" reply
+
+We add the key to the collector and reply when it is active. **Do not continue
+until you get that reply.** If you apply the key before it is loaded, the store is
+rejected (401) and goes offline.
+
+## Step 4 - Put the key in the store's config
+
+The config is one of these - use whichever one **exists**:
 
 - `C:\CXS\config\cxs-agent-<STORECODE>.json`   (newer, per-store)
 - `C:\CXS\config\cxs-agent.json`                (older, single store)
 
-Open it in Notepad (replace `<STORECODE>`):
+Open it (replace `<STORECODE>`):
 
 ```powershell
 notepad C:\CXS\config\cxs-agent-<STORECODE>.json
 ```
 
-## Step 2 - Replace the key
+Find the line `"ApiKey":  "...",` and replace **only** the text inside the quotes
+with your key. Keep the quotes and the comma, and make sure there are **no extra
+spaces**. Save and close. **Do NOT change anything else.**
 
-Find the line that looks like:
+## Step 5 - Restart the agent
 
-```
-"ApiKey":  "old-key-goes-here",
-```
-
-Replace **only** the text inside the quotes with the new key we sent you. Keep
-the quotes and the comma. Make sure there are **no extra spaces**. Save and close.
-
-**Do NOT change anything else in the file.**
-
-## Step 3 - Restart the agent
-
-The agent only reads the key when it **starts up**, so it has to be restarted for
-the new key to take effect. Run (replace `<STORECODE>`):
+The agent only reads the key when it **starts up**, so it must be restarted
+(replace `<STORECODE>`):
 
 ```powershell
 Stop-ScheduledTask  -TaskName "CXS Agent Heartbeat - <STORECODE>"
 Start-ScheduledTask -TaskName "CXS Agent Heartbeat - <STORECODE>"
 ```
 
-You do **not** need to restart anything else. The nightly data sync picks up the
-new key on its own.
+Nothing else needs restarting - the nightly data sync picks up the new key on its
+own.
 
-## Step 4 - Confirm
+## Step 6 - Confirm
 
-Within a few minutes, check the dashboard: the store should still show as
-**online / heartbeating**. Then tell us "**<StoreCode> done**".
+Within a few minutes the store should still show **online / heartbeating** on the
+dashboard. Then tell us "**<StoreCode> done**".
 
 ---
 
@@ -76,19 +98,19 @@ Within a few minutes, check the dashboard: the store should still show as
 Repeat **all** steps for each store, using that store's own StoreCode and its own
 key. Each store is independent - one config file and one heartbeat task per store.
 
----
-
 ## If something looks wrong
 
-- The store shows **offline**, or you see **401 / Unauthorized**: the key was
-  almost certainly mistyped or has a stray space. Re-open the config file,
-  carefully re-paste the key exactly as we sent it, save, and run the Stop/Start
-  commands in Step 3 again.
-- Still stuck: send us a screenshot of the config file (you can black out the key)
-  and the dashboard, and we will help. Do not keep retrying changes.
+- **Offline, or 401 / Unauthorized**, right after Step 5: either we have not
+  loaded the key yet (go back to Step 3 and wait for our reply), **or** the key
+  was mistyped or has a stray space - re-open the config, carefully re-paste the
+  key exactly, save, and run the Step 5 commands again.
+- Still stuck: send us a screenshot of the config file (black out the key) and the
+  dashboard. Do not keep retrying changes.
 
 **Do NOT:**
 
+- invent, shorten, or reuse a key,
+- apply a key **before** we confirm it is loaded,
 - touch any **other** store's config,
 - change any field **other than** `ApiKey`,
 - delete or rename any files.
