@@ -1,8 +1,7 @@
 # New Store Install (store that never had an agent)
 
 Use this when a store has **no agent at all** - nothing in `C:\CXS`, no
-`cxs-agent.json`, never been set up before. (If the store already has an older
-v1 agent, use `store-agent-v1-to-v2-upgrade.md` instead.)
+`cxs-agent.json`, never been set up before.
 
 Do every step on the store server, in **PowerShell as Administrator**.
 
@@ -21,7 +20,8 @@ copied. **Copy the whole folder** - do NOT paste file contents one at a time.
    `C:\Temp\store-agent\install-cxs-collector.ps1`, etc.).
 
 Do NOT open the scripts in Word/Notepad to copy them - just copy the folder.
-Always copy to `C:\Temp\store-agent`, **NOT** into `C:\CXS`.
+Always copy to `C:\Temp\store-agent`, **NOT** into `C:\CXS` (running from inside
+`C:\CXS` makes it copy files onto themselves).
 
 ## Step 2 - Quick checks before installing
 
@@ -31,6 +31,8 @@ $server = "WFTISERVER"; $database = "WFTIDB"
 $cs = "Server=$server;Database=$database;Integrated Security=True;TrustServerCertificate=True;Connection Timeout=10;"
 $c = New-Object System.Data.SqlClient.SqlConnection($cs); $c.Open(); "SQL OK"; $c.Close()
 ```
+Want to see `SQL OK`. If it fails, fix SQL reachability (instance name / database)
+before going further.
 
 **Internet / API reachable:**
 ```powershell
@@ -39,15 +41,19 @@ curl.exe -k https://888.insourcedata.org/api/collect/health -H "Authorization: B
 ```
 Want `TcpTestSucceeded : True` and `{"status":"ok"}`.
 
-If you get a FortiGuard "Access Blocked" page, the firewall is blocking us -
-ask the network team to whitelist `*.insourcedata.org`. If you get a certificate
-`PartialChain` error, add `-AllowSelfSignedCert` to the install command in Step 3.
-(Both are explained in `poc-store-agent-setup.md`, Step 8 / Known Issues.)
+- **FortiGuard "Access Blocked" HTML** -> the FortiGate firewall is blocking us.
+  Ask the 888 network/security team to whitelist `*.insourcedata.org` on the
+  FortiGate web filter. Stop until that's done.
+- **Certificate `PartialChain` error** -> the server is missing Cloudflare's root
+  CA. The agent handles this automatically at runtime; for manual tests use
+  `curl.exe -k`. If the installer itself complains, add `-AllowSelfSignedCert` to
+  the command in Step 3.
 
-## Step 3 - Install (fill in this store's details)
+## Step 3 - Run the installer (fill in this store's details)
 
 Below is DK003 as the example. Change the values for the store you're on.
-The API key is from Arshath.
+The API key is from Arshath. The installer copies the scripts into `C:\CXS`,
+writes the config, and creates both scheduled tasks in one go.
 
 **Wendy's:**
 ```powershell
@@ -63,7 +69,8 @@ C:\Temp\store-agent\install-cxs-collector.ps1 `
     -OracleCode "4058"
 ```
 
-**Conti's:** use `-Brand "contis"` and drop `-OracleCode`:
+**Conti's:** use `-Brand "contis"` and drop `-OracleCode` (Conti's defaults to
+Company `NOC`, NAV-format tables, and a 02:00 sync time):
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 
@@ -76,23 +83,72 @@ C:\Temp\store-agent\install-cxs-collector.ps1 `
     -StoreCode  "NOCXYZ"
 ```
 
-The installer copies the scripts into `C:\CXS`, writes the config, and creates
-both scheduled tasks. It should end with `=== Installation Complete ===` and no
-`[FAIL]` lines.
+It should end with `=== Installation Complete ===` and no `[FAIL]` lines.
 
-> Add `-SyncTime "3:30AM"` to override the default sync time (Wendy's 05:00,
-> Conti's 02:00). Add `-AllowSelfSignedCert` only if Step 2 showed a certificate
-> `PartialChain` error.
+Optional flags:
+- `-SqlServer "localhost"` if SQL Server runs on this same box (you can also just
+  omit `-SqlServer` for the Wendy's default).
+- `-SyncTime "3:30AM"` to override the default sync time (Wendy's 05:00, Conti's 02:00).
+- `-AllowSelfSignedCert` only if Step 2 showed a certificate `PartialChain` error.
 
 ## Step 4 - Let SYSTEM into SQL Server (one-time, important)
 
-The scheduled tasks run as `NT AUTHORITY\SYSTEM`, not your login. Even though
-Step 2 worked for you, the nightly task will fail with
-`Login failed for user 'NT AUTHORITY\SYSTEM'` unless you grant it read access.
+The scheduled tasks run as `NT AUTHORITY\SYSTEM`, not your login. SQL Server
+treats those as different accounts - your login can connect (which is why Step 2
+worked), but `SYSTEM` usually can't until you grant it. **Skip this and the agent
+looks fine today but the nightly sync fails tomorrow** with:
 
-Do **Step 12** in `poc-store-agent-setup.md` (grant `db_datareader` to SYSTEM, or
-to the agent machine's computer account if SQL is on a different box). Skip this
-and the agent looks fine today but stops syncing tomorrow.
+```
+Login failed for user 'NT AUTHORITY\SYSTEM'.
+```
+
+Open SSMS and pick the case that matches where SQL Server runs.
+
+### 4a. SQL Server is on the SAME machine as the agent (most common)
+
+Connected to the local SQL instance, replace `<DB>` with this store's database
+(e.g. `WFTIDB`, `WSMOD8`, `NOCSSTDB`) and run:
+
+```sql
+-- Idempotent: safe to re-run.
+USE master;
+IF NOT EXISTS (SELECT 1 FROM sys.server_principals WHERE name = N'NT AUTHORITY\SYSTEM')
+    CREATE LOGIN [NT AUTHORITY\SYSTEM] FROM WINDOWS;
+GO
+
+USE <DB>;
+IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = N'NT AUTHORITY\SYSTEM')
+    CREATE USER [NT AUTHORITY\SYSTEM] FOR LOGIN [NT AUTHORITY\SYSTEM];
+ALTER ROLE db_datareader ADD MEMBER [NT AUTHORITY\SYSTEM];
+GO
+```
+
+`db_datareader` is enough - the agent only reads, never writes.
+
+### 4b. SQL Server is on a DIFFERENT machine from the agent
+
+Cross-machine, SQL sees the agent as the **agent machine's computer account**
+(`<DOMAIN>\<HOSTNAME>$`, note the trailing `$`). On the agent machine, get that name:
+
+```powershell
+"$env:USERDOMAIN\$env:COMPUTERNAME$"
+```
+
+Then in SSMS connected to the SQL Server box, replace `DOMAIN\AGENTHOST$` with that
+value and `<DB>` with the database name:
+
+```sql
+USE master;
+IF NOT EXISTS (SELECT 1 FROM sys.server_principals WHERE name = N'DOMAIN\AGENTHOST$')
+    CREATE LOGIN [DOMAIN\AGENTHOST$] FROM WINDOWS;
+GO
+
+USE <DB>;
+IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = N'DOMAIN\AGENTHOST$')
+    CREATE USER [DOMAIN\AGENTHOST$] FOR LOGIN [DOMAIN\AGENTHOST$];
+ALTER ROLE db_datareader ADD MEMBER [DOMAIN\AGENTHOST$];
+GO
+```
 
 ## Step 5 - Check it worked
 
@@ -137,8 +193,22 @@ back empty, that data isn't on the POS anymore.
 | FTI / DK003 | wendys | WFTISERVER | WFTIDB | DK003 | 4058 |
 |       |       |           |          |           |            |
 
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---------|-------------|-----|
+| FortiGuard "Access Blocked" HTML | Firewall blocking unrated domain | Whitelist `*.insourcedata.org` on FortiGate |
+| `PartialChain` certificate error | Missing Cloudflare root CA | Agent handles it at runtime; manual tests use `curl.exe -k`; installer can take `-AllowSelfSignedCert` |
+| `Login failed for user 'NT AUTHORITY\SYSTEM'` | SYSTEM has no SQL access | Do Step 4 |
+| Heartbeat log shows `SQL=False` | Same as above | Do Step 4 |
+| `ERROR querying headers` | SQL Server not reachable | Check the SQL service, instance name, and database |
+| `ERROR posting data` / timeout | Can't reach the API | Re-run the Step 2 network checks |
+| `no rows — skipping POST` | That day had no transactions | Try a date you know has sales |
+| Sync runs but 0 rows | Wrong database or table names | Re-check Brand / Database; for Conti's confirm Company/ExtGuid |
+| `Unauthorized` (401) | Wrong API key | Confirm the key from Arshath |
+| Store not on Agent Fleet | Heartbeat task not running | `Get-ScheduledTask "CXS Agent Heartbeat - <StoreCode>"` -> `Start-ScheduledTask`; check `C:\CXS\logs\agent.log` |
+
 ## Notes
-- Copy files to `C:\Temp\store-agent`, never into `C:\CXS` (running from inside
-  `C:\CXS` makes it copy files onto themselves).
-- For full detail on any step - prerequisites, FortiGate, certificates, the
-  SYSTEM/SQL grant, troubleshooting - see `poc-store-agent-setup.md`.
+- Copy files to `C:\Temp\store-agent`, never into `C:\CXS`.
+- Logs: daily sync `C:\CXS\logs\sync-<StoreCode>.log`, heartbeat `C:\CXS\logs\agent.log`.
+  Send the relevant file to Arshath when troubleshooting.
