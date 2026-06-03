@@ -56,15 +56,14 @@ Write-Host "Found $($scripts.Count) installed script(s):" -ForegroundColor Green
 $scripts | ForEach-Object { Write-Host "  $_" }
 Write-Host ""
 
-# The v2 heartbeat agent uses a single config (C:\CXS\config\cxs-agent.json) and a
-# single agent script per machine. If this box hosts more than one store, each
-# per-store heartbeat task would overwrite that one config - only the last store
-# processed would report correctly. Warn loudly rather than silently misconfigure.
+# Multi-store is now supported (issue #53): each store gets its own per-store agent
+# config (cxs-agent-<StoreCode>.json) and a generated per-store heartbeat launcher
+# that pins CXS_CONFIG_FILE, so every store reports under its own identity even when
+# several share one box.
 if ($scripts.Count -gt 1) {
-    Write-Host "[WARN] Multiple store collector scripts detected on this machine." -ForegroundColor Yellow
-    Write-Host "[WARN] The v2 heartbeat agent supports ONE store identity per machine; the" -ForegroundColor Yellow
-    Write-Host "[WARN] last store processed will own cxs-agent.json. For multi-store servers," -ForegroundColor Yellow
-    Write-Host "[WARN] contact support before relying on heartbeats/remote commands." -ForegroundColor Yellow
+    Write-Host "[INFO] Multiple store collector scripts detected ($($scripts.Count)) - multi-store mode." -ForegroundColor Cyan
+    Write-Host "[INFO] Each store gets its own cxs-agent-<StoreCode>.json and heartbeat launcher," -ForegroundColor Cyan
+    Write-Host "[INFO] so all stores report under their own identity." -ForegroundColor Cyan
     Write-Host ""
 }
 
@@ -119,6 +118,8 @@ foreach ($scriptPath in $scripts) {
 
     # Ensure log file is store-specific
     $updated = $updated -replace 'LogFile\s*=\s*"[^"]*"', "LogFile    = `"C:\CXS\logs\sync-$storeCode.log`""
+    # Point this store's collector at its own per-store agent config (issue #53).
+    $updated = $updated -replace 'cxs-agent\.json', "cxs-agent-$storeCode.json"
 
     # Write updated script
     if ($Migrate -and $fileName -eq "cxs-collector.ps1") {
@@ -179,7 +180,7 @@ foreach ($scriptPath in $scripts) {
         }
     }
 
-    # Write agent config from extracted values
+    # Write agent config from extracted values (per-store path - issue #53)
     $agentCfg = @{}
     $agentKeys = @("ApiUrl", "ApiKey", "SqlServer", "Database", "Brand", "Company", "StoreCode")
     foreach ($key in $agentKeys) {
@@ -187,23 +188,50 @@ foreach ($scriptPath in $scripts) {
             $agentCfg[$key] = $configValues[$key]
         }
     }
-    $agentConfigPath = Join-Path $InstallDir "config\cxs-agent.json"
-    # Preserve AllowSelfSignedCert from the existing agent config. It is an
-    # agent-only setting (not present in the collector script we extract from),
-    # so regenerating the config from collector values alone would silently drop
-    # it and re-enable TLS validation on stores that opted into the bypass.
-    if (Test-Path $agentConfigPath) {
+    # Per-store log + sync-summary paths so multi-store boxes don't collide.
+    $agentCfg["LogFile"] = "C:\CXS\logs\agent-$storeCode.log"
+    $agentCfg["SyncSummaryFile"] = "C:\CXS\state\last-sync-$storeCode.json"
+    $agentConfigPath = Join-Path $InstallDir "config\cxs-agent-$storeCode.json"
+    # Preserve AllowSelfSignedCert (agent-only setting, not in the collector script
+    # we extract from). Read the per-store file if present, else fall back to the
+    # legacy shared cxs-agent.json so a single-store box migrating to per-store
+    # config keeps its TLS-bypass opt-in rather than silently re-enabling validation.
+    $legacyAgentConfigPath = Join-Path $InstallDir "config\cxs-agent.json"
+    $prevAgentConfigPath = if (Test-Path $agentConfigPath) { $agentConfigPath }
+                           elseif (Test-Path $legacyAgentConfigPath) { $legacyAgentConfigPath }
+                           else { $null }
+    if ($prevAgentConfigPath) {
         try {
-            $existingAgentCfg = Get-Content $agentConfigPath -Raw | ConvertFrom-Json
+            $existingAgentCfg = Get-Content $prevAgentConfigPath -Raw | ConvertFrom-Json
             if ($null -ne $existingAgentCfg.AllowSelfSignedCert) {
                 $agentCfg["AllowSelfSignedCert"] = [bool]$existingAgentCfg.AllowSelfSignedCert
             }
         } catch {
-            Write-Host "  [WARN] Could not read existing cxs-agent.json to preserve AllowSelfSignedCert: $_" -ForegroundColor Yellow
+            Write-Host "  [WARN] Could not read existing agent config to preserve AllowSelfSignedCert: $_" -ForegroundColor Yellow
         }
     }
     $agentCfg | ConvertTo-Json -Depth 5 | Set-Content -Path $agentConfigPath -Encoding UTF8
     Write-Host "  [OK] Agent config written for $storeCode`: $agentConfigPath" -ForegroundColor Green
+
+    # Seed the per-store last-sync summary from the legacy shared file so the first
+    # heartbeat after upgrade doesn't report "no last sync" until the next daily run
+    # (issue #53). Only safe on a single-store box: there the legacy last-sync.json
+    # unambiguously belongs to this store. On a (previously broken) multi-store box
+    # the shared file's owner is ambiguous, so skip and let each daily run populate
+    # its own per-store file. Copy (not move) to preserve rollback.
+    if ($scripts.Count -eq 1) {
+        $legacySummary  = Join-Path $InstallDir "state\last-sync.json"
+        $perStoreSummary = Join-Path $InstallDir "state\last-sync-$storeCode.json"
+        if ((Test-Path $legacySummary) -and -not (Test-Path $perStoreSummary)) {
+            try {
+                New-Item -ItemType Directory -Path (Split-Path $perStoreSummary -Parent) -Force | Out-Null
+                Copy-Item $legacySummary $perStoreSummary -Force
+                Write-Host "  [OK] Seeded per-store last-sync summary: $perStoreSummary" -ForegroundColor Green
+            } catch {
+                Write-Host "  [WARN] Could not seed per-store last-sync summary: $_" -ForegroundColor Yellow
+            }
+        }
+    }
 
     # Register heartbeat task (idempotent) - only if the agent was deployed,
     # otherwise we'd start a task that launches a non-existent script.
@@ -219,9 +247,22 @@ foreach ($scriptPath in $scripts) {
         Write-Host "  Removed existing heartbeat task: $hbTaskName"
     }
 
+    # Per-store heartbeat launcher (issue #53): sets store-scoped CXS_CONFIG_FILE,
+    # then runs the shared cxs-agent.ps1. A wrapper (not an inline -Command) keeps
+    # -File exit-code semantics and avoids quote-nesting inside the task argument.
+    $hbLauncherPath = Join-Path $InstallDir "cxs-agent-$storeCode.ps1"
+    $hbLauncher = @"
+# Auto-generated per-store launcher for the CXS heartbeat agent (issue #53). Do not edit.
+`$env:CXS_CONFIG_FILE = "$InstallDir\config\cxs-agent-$storeCode.json"
+& "`$PSScriptRoot\cxs-agent.ps1"
+exit `$LASTEXITCODE
+"@
+    Set-Content -Path $hbLauncherPath -Value $hbLauncher -Encoding UTF8
+    Write-Host "  [OK] Heartbeat launcher written: $hbLauncherPath" -ForegroundColor Green
+
     $hbAction = New-ScheduledTaskAction `
         -Execute "powershell.exe" `
-        -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$InstallDir\cxs-agent.ps1`"" `
+        -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$hbLauncherPath`"" `
         -WorkingDirectory $InstallDir
 
     $hbTrigger = New-ScheduledTaskTrigger -AtStartup

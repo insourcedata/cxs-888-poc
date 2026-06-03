@@ -94,7 +94,13 @@ $ConfigFile = if ($env:CXS_CONFIG_FILE) { $env:CXS_CONFIG_FILE } else { "C:\CXS\
 if (Test-Path $ConfigFile) {
     try {
         $fileConfig = Get-Content $ConfigFile -Raw | ConvertFrom-Json
+        # Skip keys owned by the heartbeat agent, not the collector. Both share one
+        # per-store config file (issue #53); its LogFile / SyncSummaryFile target the
+        # AGENT's per-store paths, so applying them here would clobber the collector's
+        # own baked sync-<store>.log and make sync + heartbeat logs interleave.
+        $agentOnlyKeys = @("LogFile", "SyncSummaryFile")
         foreach ($prop in $fileConfig.PSObject.Properties) {
+            if ($agentOnlyKeys -contains $prop.Name) { continue }
             $Config[$prop.Name] = $prop.Value
         }
     } catch {
@@ -435,7 +441,7 @@ function Invoke-DaySync {
             processingWindowEnd   = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
             durationMs            = [int]((Get-Date) - $syncStart).TotalMilliseconds
         }
-        $summary | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $summaryDir "last-sync.json") -Force
+        $summary | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $summaryDir "last-sync-$($Config.StoreCode).json") -Force
 
         return $true  # empty day is a "success" - don't want to block the backfill loop
     }
@@ -468,7 +474,7 @@ function Invoke-DaySync {
             processingWindowEnd     = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
             durationMs              = [int]((Get-Date) - $syncStart).TotalMilliseconds
         }
-        $summary | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $summaryDir "last-sync.json") -Force
+        $summary | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $summaryDir "last-sync-$($Config.StoreCode).json") -Force
 
         return $true
     }
