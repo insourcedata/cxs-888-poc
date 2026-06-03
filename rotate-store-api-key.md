@@ -1,5 +1,11 @@
 # Generate and Apply a Store's Collector Key
 
+> **This manual method is now the fallback.** Once a store is on the latest agent
+> (the `rotate-key` update - see `store-agent-v1-to-v2-upgrade.md`), the CXS team
+> issues and rotates that store's key **from the dashboard** and the agent applies
+> it automatically, with no box visit. Follow the manual steps below only when
+> asked to (e.g. a box that cannot reach the dashboard, or first-time bootstrap).
+
 We are moving each store onto its **own** collector key (more secure - a leaked
 key no longer affects every store). For each store you will: **generate a key on
 the store server, send it to us, wait for us to activate it, then apply it and

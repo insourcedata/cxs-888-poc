@@ -57,6 +57,22 @@ The old shared `C:\CXS\config\cxs-agent.json` is intentionally left in place
 
 ---
 
+## Also new: dashboard-managed API keys
+
+This release also adds a `rotate-key` command handler. Once a store is on this
+update, the CXS team can issue and rotate that store's **own** collector API key
+straight from the dashboard: the agent fetches the new key, applies it, and
+switches over on its own - **no box visit, no downtime**.
+
+You do not run anything extra for this. It deploys automatically when you run the
+updater (Section 3), which copies the new command into `C:\CXS\commands\`. After
+the update, the CXS team does the rest from their side.
+
+Hand-applying a key on the box (see `rotate-store-api-key.md`) is now only a
+**fallback** for stores that cannot use the dashboard method.
+
+---
+
 ## 1. Pre-flight: identify your current install type
 
 Before upgrading, determine which v1 install variant is on the store
@@ -128,7 +144,7 @@ The folder must contain all of these (the updater needs them together):
 | `update-cxs-collector.ps1` | The updater script you will run |
 | `cxs-collector.ps1` | New collector template (updater injects config into this) |
 | `cxs-agent.ps1` | Heartbeat agent (copied to `C:\CXS\`) |
-| `commands\*.ps1` | 7 remote command handlers (copied to `C:\CXS\commands\`) |
+| `commands\*.ps1` | 8 remote command handlers incl. `rotate-key` (copied to `C:\CXS\commands\`) |
 
 > **Important:** Do not copy only the updater. It exits with an error
 > if `cxs-collector.ps1` is missing from the same directory, and the
