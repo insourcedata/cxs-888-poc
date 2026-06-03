@@ -206,8 +206,17 @@ foreach ($scriptPath in $scripts) {
             if ($null -ne $existingAgentCfg.AllowSelfSignedCert) {
                 $agentCfg["AllowSelfSignedCert"] = [bool]$existingAgentCfg.AllowSelfSignedCert
             }
+            # Preserve a rotated per-store ApiKey. After a dashboard Admit/rotate the
+            # live key lives in THIS agent config; the collector script we extract
+            # from still has the OLD enrollment key baked in. Without this, re-running
+            # the updater would overwrite the rotated key with the stale one and (once
+            # shared-key enforcement is on) knock the store offline. To deliberately
+            # set a new key, re-run the installer (-ApiKey) or rotate from the dashboard.
+            if ($existingAgentCfg.ApiKey -and "$($existingAgentCfg.ApiKey)".Length -ge 16) {
+                $agentCfg["ApiKey"] = $existingAgentCfg.ApiKey
+            }
         } catch {
-            Write-Host "  [WARN] Could not read existing agent config to preserve AllowSelfSignedCert: $_" -ForegroundColor Yellow
+            Write-Host "  [WARN] Could not read existing agent config to preserve AllowSelfSignedCert/ApiKey: $_" -ForegroundColor Yellow
         }
     }
     $agentCfg | ConvertTo-Json -Depth 5 | Set-Content -Path $agentConfigPath -Encoding UTF8
