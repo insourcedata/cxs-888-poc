@@ -185,6 +185,10 @@ $scriptContent = $scriptContent -replace 'ExtGuid\s*=\s*"[^"]*"', "ExtGuid    = 
 $scriptContent = $scriptContent -replace 'StoreCode\s*=\s*"[^"]*"', "StoreCode  = `"$StoreCode`""
 $scriptContent = $scriptContent -replace 'OracleCode\s*=\s*"[^"]*"', "OracleCode = `"$OracleCode`""
 $scriptContent = $scriptContent -replace 'LogFile\s*=\s*"[^"]*"', "LogFile    = `"C:\CXS\logs\sync-$StoreCode.log`""
+# Point this store's collector at its own per-store agent config so a box hosting
+# >1 store doesn't have every collector overlay the same shared cxs-agent.json
+# (issue #53). Rewrites both the config-path default and the doc comment.
+$scriptContent = $scriptContent -replace 'cxs-agent\.json', "cxs-agent-$StoreCode.json"
 
 $destScript = Join-Path $InstallDir $ScriptName
 Set-Content -Path $destScript -Value $scriptContent -Encoding UTF8
@@ -208,7 +212,7 @@ if (-not (Test-Path $agentSource)) {
 Copy-Item $agentSource (Join-Path $InstallDir "cxs-agent.ps1") -Force
 Write-Host "  Installed agent to: $InstallDir\cxs-agent.ps1" -ForegroundColor Green
 
-# Write agent config file
+# Write agent config file (per-store so multiple stores on one box don't collide - issue #53)
 $agentConfig = @{
     ApiUrl    = $ApiUrl
     ApiKey    = $ApiKey
@@ -218,8 +222,12 @@ $agentConfig = @{
     Database  = $Database
     Company   = $Company
     AllowSelfSignedCert = [bool]$AllowSelfSignedCert
+    # Per-store log + sync-summary paths so heartbeat agents and daily syncs on a
+    # multi-store box don't overwrite each other's files.
+    LogFile             = "C:\CXS\logs\agent-$StoreCode.log"
+    SyncSummaryFile     = "C:\CXS\state\last-sync-$StoreCode.json"
 }
-$agentConfigPath = Join-Path $InstallDir "config\cxs-agent.json"
+$agentConfigPath = Join-Path $InstallDir "config\cxs-agent-$StoreCode.json"
 $agentConfig | ConvertTo-Json -Depth 5 | Set-Content -Path $agentConfigPath -Encoding UTF8
 Write-Host "  Agent config written to: $agentConfigPath" -ForegroundColor Green
 
@@ -368,9 +376,23 @@ if ($existingHeartbeat) {
     Write-Host "  Removed existing heartbeat task"
 }
 
+# Per-store heartbeat launcher (issue #53): a tiny generated wrapper that sets the
+# store-scoped CXS_CONFIG_FILE, then runs the SHARED cxs-agent.ps1 via the call
+# operator. Using a wrapper (not an inline -Command) keeps -File exit-code
+# semantics and avoids fragile quote-nesting inside the scheduled-task argument.
+$hbLauncherPath = Join-Path $InstallDir "cxs-agent-$StoreCode.ps1"
+$hbLauncher = @"
+# Auto-generated per-store launcher for the CXS heartbeat agent (issue #53). Do not edit.
+`$env:CXS_CONFIG_FILE = "$InstallDir\config\cxs-agent-$StoreCode.json"
+& "`$PSScriptRoot\cxs-agent.ps1"
+exit `$LASTEXITCODE
+"@
+Set-Content -Path $hbLauncherPath -Value $hbLauncher -Encoding UTF8
+Write-Host "  Heartbeat launcher written: $hbLauncherPath" -ForegroundColor Green
+
 $hbAction = New-ScheduledTaskAction `
     -Execute "powershell.exe" `
-    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$InstallDir\cxs-agent.ps1`"" `
+    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$hbLauncherPath`"" `
     -WorkingDirectory $InstallDir
 
 $hbTrigger = New-ScheduledTaskTrigger -AtStartup
@@ -402,11 +424,11 @@ Write-Host ""
 Write-Host "Store:          $StoreCode ($OracleCode)"
 Write-Host "Brand:          $Brand"
 Write-Host "Files:          $InstallDir\$ScriptName"
-Write-Host "Agent:          $InstallDir\cxs-agent.ps1"
-Write-Host "Agent config:   $InstallDir\config\cxs-agent.json"
+Write-Host "Agent:          $InstallDir\cxs-agent.ps1 (via launcher $InstallDir\cxs-agent-$StoreCode.ps1)"
+Write-Host "Agent config:   $InstallDir\config\cxs-agent-$StoreCode.json"
 Write-Host "Scheduled task: '$TaskName' (daily at $SyncTime)"
 Write-Host "Heartbeat task: '$HeartbeatTaskName' (at startup)"
-Write-Host "Logs:           C:\CXS\logs\sync-$StoreCode.log"
+Write-Host "Logs:           sync C:\CXS\logs\sync-$StoreCode.log  |  agent C:\CXS\logs\agent-$StoreCode.log"
 Write-Host ""
 Write-Host "To run a sync manually:" -ForegroundColor Yellow
 Write-Host "  powershell -File `"$(Join-Path $InstallDir $ScriptName)`"" -ForegroundColor Yellow
