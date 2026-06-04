@@ -44,14 +44,29 @@ It should end with `=== Installation Complete ===`.
 
 ## Step 3 - Check it worked
 
+The installer names files per-store (`cxs-agent-<StoreCode>.json`,
+`agent-<StoreCode>.log`). This block reads them automatically - nothing to edit,
+works for one store or several on the box:
+
 ```powershell
-$sc = (Get-Content C:\CXS\config\cxs-agent.json -Raw | ConvertFrom-Json).StoreCode
-Get-ScheduledTask -TaskName "CXS Daily Sync - $sc","CXS Agent Heartbeat - $sc" | Select-Object TaskName, State
-Start-Sleep 12
-Get-Content C:\CXS\logs\agent.log -Tail 8
+Get-ChildItem C:\CXS\config\cxs-agent-*.json | ForEach-Object {
+    $sc = ($_.Name -replace '^cxs-agent-(.+)\.json$','$1')
+    Write-Host "`n=== $sc ===" -ForegroundColor Cyan
+    Get-ScheduledTask -TaskName "CXS Daily Sync - $sc","CXS Agent Heartbeat - $sc" `
+        -ErrorAction SilentlyContinue | Select-Object TaskName, State | Format-Table -Auto
+    Start-ScheduledTask -TaskName "CXS Agent Heartbeat - $sc" -ErrorAction SilentlyContinue
+    $log = "C:\CXS\logs\agent-$sc.log"
+    $deadline = (Get-Date).AddSeconds(60)
+    while ((Get-Date) -lt $deadline) {
+        if ((Test-Path $log) -and (Select-String $log -Pattern 'Heartbeat (sent|failed)' -Quiet)) { break }
+        Start-Sleep 5
+    }
+    if (Test-Path $log) { Get-Content $log -Tail 20 }
+    else { Write-Host "No log yet at $log - heartbeat task may not be running" -ForegroundColor Yellow }
+}
 ```
 
-You want to see:
+You want to see, for each store:
 - Daily Sync task = **Ready**, Heartbeat task = **Running**
 - A line in the log like `Heartbeat sent. SQL=True ...`
 - The store shows up on the dashboard: **Admin -> Agent Fleet**

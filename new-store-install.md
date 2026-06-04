@@ -152,17 +152,37 @@ GO
 
 ## Step 5 - Check it worked
 
+The installer names each store's files per-store (`cxs-agent-<StoreCode>.json`,
+`agent-<StoreCode>.log`). This block reads them automatically, so there is
+nothing to edit - it works whether the box runs one store or several:
+
 ```powershell
-$sc = (Get-Content C:\CXS\config\cxs-agent.json -Raw | ConvertFrom-Json).StoreCode
-Get-ScheduledTask -TaskName "CXS Daily Sync - $sc","CXS Agent Heartbeat - $sc" | Select-Object TaskName, State
-Start-Sleep 12
-Get-Content C:\CXS\logs\agent.log -Tail 8
+Get-ChildItem C:\CXS\config\cxs-agent-*.json | ForEach-Object {
+    $sc = ($_.Name -replace '^cxs-agent-(.+)\.json$','$1')
+    Write-Host "`n=== $sc ===" -ForegroundColor Cyan
+    Get-ScheduledTask -TaskName "CXS Daily Sync - $sc","CXS Agent Heartbeat - $sc" `
+        -ErrorAction SilentlyContinue | Select-Object TaskName, State | Format-Table -Auto
+    Start-ScheduledTask -TaskName "CXS Agent Heartbeat - $sc" -ErrorAction SilentlyContinue
+    $log = "C:\CXS\logs\agent-$sc.log"
+    $deadline = (Get-Date).AddSeconds(60)
+    while ((Get-Date) -lt $deadline) {
+        if ((Test-Path $log) -and (Select-String $log -Pattern 'Heartbeat (sent|failed)' -Quiet)) { break }
+        Start-Sleep 5
+    }
+    if (Test-Path $log) { Get-Content $log -Tail 20 }
+    else { Write-Host "No log yet at $log - heartbeat task may not be running" -ForegroundColor Yellow }
+}
 ```
 
-You want to see:
+You want to see, for each store:
 - Daily Sync task = **Ready**, Heartbeat task = **Running**
 - A log line like `Heartbeat sent. SQL=True ...`
 - The store shows up on the dashboard: **Admin -> Agent Fleet** (within ~5 min)
+
+If you instead see `Heartbeat failed: ...` in the log, the agent is running but
+can't reach the API - the error text says why (firewall, proxy, certificate, or
+a wrong API key). The scheduled task runs as `NT AUTHORITY\SYSTEM`, so a network
+path that works from your own login may still be blocked for SYSTEM.
 
 If the log says `SQL=False`, SYSTEM still can't get into SQL - redo Step 4.
 
@@ -206,9 +226,9 @@ back empty, that data isn't on the POS anymore.
 | `no rows — skipping POST` | That day had no transactions | Try a date you know has sales |
 | Sync runs but 0 rows | Wrong database or table names | Re-check Brand / Database; for Conti's confirm Company/ExtGuid |
 | `Unauthorized` (401) | Wrong API key | Confirm the key from Arshath |
-| Store not on Agent Fleet | Heartbeat task not running | `Get-ScheduledTask "CXS Agent Heartbeat - <StoreCode>"` -> `Start-ScheduledTask`; check `C:\CXS\logs\agent.log` |
+| Store not on Agent Fleet | Heartbeat task not running, or SYSTEM can't reach the API | `Get-ScheduledTask "CXS Agent Heartbeat - <StoreCode>"` -> `Start-ScheduledTask`; read `C:\CXS\logs\agent-<StoreCode>.log` for the real error |
 
 ## Notes
 - Copy files to `C:\Temp\store-agent`, never into `C:\CXS`.
-- Logs: daily sync `C:\CXS\logs\sync-<StoreCode>.log`, heartbeat `C:\CXS\logs\agent.log`.
+- Logs: daily sync `C:\CXS\logs\sync-<StoreCode>.log`, heartbeat `C:\CXS\logs\agent-<StoreCode>.log`.
   Send the relevant file to Arshath when troubleshooting.
