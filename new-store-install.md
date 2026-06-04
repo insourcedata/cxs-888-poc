@@ -152,32 +152,29 @@ GO
 
 ## Step 5 - Check it worked
 
-The installer names each store's files per-store (`cxs-agent-<StoreCode>.json`,
-`agent-<StoreCode>.log`). This block reads them automatically, so there is
-nothing to edit - it works whether the box runs one store or several:
+The installer names this store's files per-store (`cxs-agent-<StoreCode>.json`,
+`agent-<StoreCode>.log`). Set `$sc` to the StoreCode you installed in Step 3,
+then run the rest as-is:
 
 ```powershell
-Get-ChildItem C:\CXS\config\cxs-agent-*.json | ForEach-Object {
-    $sc = ($_.Name -replace '^cxs-agent-(.+)\.json$','$1')
-    Write-Host "`n=== $sc ===" -ForegroundColor Cyan
-    Get-ScheduledTask -TaskName "CXS Daily Sync - $sc","CXS Agent Heartbeat - $sc" `
-        -ErrorAction SilentlyContinue | Select-Object TaskName, State | Format-Table -Auto
-    Start-ScheduledTask -TaskName "CXS Agent Heartbeat - $sc" -ErrorAction SilentlyContinue
-    $log = "C:\CXS\logs\agent-$sc.log"
-    $deadline = (Get-Date).AddSeconds(60)
-    while ((Get-Date) -lt $deadline) {
-        if ((Test-Path $log) -and (Select-String $log -Pattern 'Heartbeat (sent|failed)' -Quiet)) { break }
-        Start-Sleep 5
-    }
-    if (Test-Path $log) { Get-Content $log -Tail 20 }
-    else { Write-Host "No log yet at $log - heartbeat task may not be running" -ForegroundColor Yellow }
-}
+$sc = "DK003"   # <-- change to the StoreCode you installed in Step 3
+
+Get-ScheduledTask -TaskName "CXS Daily Sync - $sc","CXS Agent Heartbeat - $sc" `
+    -ErrorAction SilentlyContinue | Select-Object TaskName, State
+Start-ScheduledTask -TaskName "CXS Agent Heartbeat - $sc" -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 30
+$log = "C:\CXS\logs\agent-$sc.log"
+if (Test-Path $log) { Get-Content $log -Tail 20 }
+else { "No log yet at $log - the heartbeat task may not be running." }
 ```
 
-You want to see, for each store:
+You want to see:
 - Daily Sync task = **Ready**, Heartbeat task = **Running**
 - A log line like `Heartbeat sent. SQL=True ...`
 - The store shows up on the dashboard: **Admin -> Agent Fleet** (within ~5 min)
+
+If the log only shows `CXS Agent starting` (no `Heartbeat sent` yet), wait a
+minute and re-run the last two lines - the first heartbeat can take a moment.
 
 If you instead see `Heartbeat failed: ...` in the log, the agent is running but
 can't reach the API - the error text says why (firewall, proxy, certificate, or
