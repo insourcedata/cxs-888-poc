@@ -1,8 +1,9 @@
 # Quick: Update a Store That Is Already Running
 
 For a store that is **already Online** on the dashboard (it already has the
-agent). This adds the new key-rotation command so the CXS team can manage that
-store's key from the dashboard. **No downtime.**
+agent). This brings its agent up to the **latest version (v2.1)** — so the CXS
+team can both **rotate that store's key** and **re-sync / correct its history**
+from the dashboard. **No downtime, safe to run anytime.**
 
 - Brand-new machine instead (nothing in `C:\CXS` yet)? Use **`new-store-install.md`**.
 - Hit a snag, or it's a very old single-file install? Use the full guide

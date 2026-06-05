@@ -134,7 +134,7 @@ public class TrustAllCertsPolicy : ICertificatePolicy {
 }
 
 # --- Agent version ----------------------------------------------------------------
-$AgentVersion = "2.0"
+$AgentVersion = "2.1"
 
 # --- Telemetry --------------------------------------------------------------------
 
@@ -359,6 +359,7 @@ function Invoke-DaySync {
         oracleCode = $Config.OracleCode
         syncDate   = $Day
         mode       = $Mode
+        replace    = ($Mode -eq "backfill")   # replace only on deliberate backfill/re-sync
         tables     = @{}
     }
 

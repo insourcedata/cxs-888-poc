@@ -203,17 +203,9 @@ The script has two modes:
 powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector.ps1"
 ```
 
-**Mode 2 — Backfill (`-StartDate` / `-EndDate`).** Walks a date range one day at a time, one POST per day. Use this for historical data or to re-sync a specific date.
+**Mode 2 — Backfill (`-StartDate` / `-EndDate`).** Walks a date range, one POST per day, and **replaces** each day with the freshly pulled copy. This is the mechanism the **dashboard's Re-sync** drives — you don't run it by hand anymore. A box-run range pull is **rejected** by the collector unless a dashboard Re-sync authorized that range (a guard so a store can't accidentally wipe its own history). To load history or fix a day, use **Admin → Agent Fleet → [store] → Re-sync** (see `how-to-fix-a-stores-old-numbers.md`).
 
-```powershell
-# Sync a single specific date
-powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector.ps1" -StartDate "2026-04-10" -EndDate "2026-04-10"
-
-# Sync a range (e.g. all of March)
-powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector.ps1" -StartDate "2026-03-01" -EndDate "2026-03-31"
-```
-
-Both modes are **idempotent** — safe to re-run. If the data already exists, duplicates are skipped.
+> Daily mode (Mode 1) is **additive** and safe to re-run — a day that already exists is left as-is (duplicates skipped). Backfill (Mode 2, via the dashboard) **replaces** the day, so re-issuing a Re-sync is also safe.
 
 **Validate — all must be true:**
 - [ ] `headers: XX rows` — number > 0
@@ -223,7 +215,7 @@ Both modes are **idempotent** — safe to re-run. If the data already exists, du
 - [ ] `=== CXS Sync Complete ===`
 - [ ] No `ERROR` lines in the output
 
-**If daily mode shows "no rows — skipping POST":** Yesterday had no transactions. Use backfill mode with a known-good date to test the pipeline end-to-end.
+**If daily mode shows "no rows — skipping POST":** Yesterday had no transactions. Ask the CXS team to issue a one-day **Re-sync** from the dashboard (Admin → Agent Fleet → this store) for a recent date you know has sales, and confirm it lands under **Admin → Store Syncs**.
 
 ---
 
@@ -342,12 +334,12 @@ You should see one row showing the principal mapped to `db_datareader`.
 Run the agent under `SYSTEM` context using [PsExec](https://learn.microsoft.com/sysinternals/downloads/psexec) (Sysinternals) to simulate the scheduled task without waiting overnight:
 
 ```powershell
-# -s runs as SYSTEM. Replace the date with one that has data.
+# -s runs as SYSTEM. No date args = daily mode (yesterday) — exactly what the nightly task runs.
 psexec -s -i powershell.exe -ExecutionPolicy Bypass `
-    -File C:\CXS\cxs-collector.ps1 -StartDate "2026-05-07" -EndDate "2026-05-07"
+    -File C:\CXS\cxs-collector.ps1
 ```
 
-If this returns `POST ok: accepted`, the scheduled task will work the next morning.
+If this returns `POST ok: accepted` — or `no rows — skipping POST` on a day with no sales, which still proves SYSTEM can reach SQL and the API — the scheduled task will work the next morning.
 
 ---
 
@@ -504,7 +496,7 @@ Windows Servers may be missing Cloudflare's root CA certificates. Symptoms:
 | `ERROR: ApiUrl or ApiKey is missing` | Config not updated | Edit `$Config` in `cxs-collector.ps1` (Step 5) |
 | `ERROR querying headers` | SQL Server not reachable | Check SQL Server service, verify instance name and database |
 | `ERROR posting data` / timeout | Can't reach CXS API | Run Step 8 diagnostics (DNS → TCP → HTTPS) |
-| `no rows — skipping POST` | Yesterday had no transactions | Use `-StartDate`/`-EndDate` to test a known-good date |
+| `no rows — skipping POST` | Yesterday had no transactions | Ask the CXS team to issue a one-day **Re-sync** from the dashboard for a known-good date |
 | Script runs but 0 rows | Wrong database or table names | Verify in SSMS — check Company name and ExtGuid |
 | `Unauthorized` (401) | API key mismatch | Verify the API key matches the one in this guide |
 | `processed` count didn't increase | Collector accepted but processor failed | Notify Arshath — server-side processing issue |
@@ -568,28 +560,11 @@ Get-ScheduledTask -TaskName "CXS Daily Sync" | Get-ScheduledTaskInfo | Select-Ob
 
 ### If a nightly sync fails
 
-The failed day won't be automatically retried. To fill the gap, RDP into the store and run:
-
-```powershell
-# Replay a single missed day
-powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector.ps1" -StartDate "2026-04-14" -EndDate "2026-04-14"
-
-# Replay a range of missed days
-powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector.ps1" -StartDate "2026-04-14" -EndDate "2026-04-16"
-```
-
-Safe to re-run even if the day partially succeeded — duplicate transactions are skipped automatically.
+The failed day won't be automatically retried. To fill the gap, the CXS team issues a **Re-sync from the dashboard** — **Admin → Agent Fleet → [store] → Re-sync** — with the missed day(s) as the start/end. The agent re-pulls them on its next check-in and the dashboard **replaces** those days (safe to re-issue). Don't replay from the box: a box-run range pull is now rejected unless a dashboard Re-sync authorized it.
 
 ### If you need to backfill historical data
 
-For a new store that needs months of historical data loaded:
-
-```powershell
-# Backfill all of Q1 2026 (walks day by day, one POST per day)
-powershell -ExecutionPolicy Bypass -File "C:\CXS\cxs-collector.ps1" -StartDate "2026-01-01" -EndDate "2026-03-31"
-```
-
-If any day fails mid-backfill, the script stops and prints the exact command to resume from the failed day.
+To load history for a store, or to correct days that look wrong, the CXS team issues a **Re-sync from the dashboard** (**Admin → Agent Fleet → [store] → Re-sync**) for the range. It pulls day by day and **replaces** each day. Do long ranges in chunks — **about a month at a time** (a single Re-sync is capped at 90 days). The agent only returns what the store's POS still keeps; days the POS has purged can't be recovered. Full operator steps: **`how-to-fix-a-stores-old-numbers.md`**.
 
 ### Common issues with automated runs
 

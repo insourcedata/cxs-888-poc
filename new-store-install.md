@@ -183,23 +183,32 @@ path that works from your own login may still be blocked for SYSTEM.
 
 If the log says `SQL=False`, SYSTEM still can't get into SQL - redo Step 4.
 
-## Step 6 - First sync + backfill
+## Step 6 - First sync + loading history
 
-Pull a known-good day to confirm data flows end to end (use a recent date that
-has sales):
+**Confirm data flows (quick check).** Run the store's daily sync once - it pulls
+**yesterday** and adds it (no special permission needed):
 ```powershell
-C:\CXS\cxs-collector-DK003.ps1 -StartDate "2026-06-01" -EndDate "2026-06-01"
+C:\CXS\cxs-collector-DK003.ps1
 ```
-Want `POST ok: accepted`. Then check **Admin -> Store Syncs** on the dashboard -
-the store should show `status: ok` with that date.
+Want `POST ok: accepted` (or `no rows — skipping POST` if yesterday had no sales).
+Then check **Admin -> Store Syncs** on the dashboard - the store shows `status: ok`.
 
-To pull history, give a date range (one POST per day, safe to re-run -
-duplicates are skipped):
-```powershell
-C:\CXS\cxs-collector-DK003.ps1 -StartDate "2025-01-01" -EndDate "2025-03-31"
-```
+**Load history / fix a day - from the dashboard, not the box.** To pull a date
+range (initial history, or to re-pull days that look wrong), the CXS team issues a
+**Re-sync** from **Admin -> Agent Fleet -> [this store]** with the start/end dates.
+The agent pulls those days on its next check-in and the dashboard **replaces** each
+day with the fresh copy (so it's safe to re-issue). Do long ranges about a month at
+a time.
+
+> A date-range pull run directly on the box (`cxs-collector-<store>.ps1 -StartDate
+> ... -EndDate ...`) is now **rejected** by the server unless a matching dashboard
+> Re-sync authorized it - this stops a store from wiping its own history by
+> accident. Always start backfills from the dashboard. See
+> **`how-to-fix-a-stores-old-numbers.md`**.
+
 The agent can only return what the store's POS still keeps - if older dates come
-back empty, that data isn't on the POS anymore.
+back empty (or a day shows `failed` with "no rows"), that data isn't on the POS
+anymore.
 
 ---
 
