@@ -20,6 +20,16 @@ param(
     [switch]$Migrate
 )
 
+# --- PowerShell version pre-flight (this updater supports 4.0+; fail loudly, never silently dark) ---
+$psv = $PSVersionTable.PSVersion
+if ([version]("{0}.{1}" -f $psv.Major, $psv.Minor) -lt [version]"4.0") {
+    Write-Host "ERROR: PowerShell $psv detected. This updater requires PowerShell 4.0 or later (install WMF 4.0+ and re-run)." -ForegroundColor Red
+    exit 1
+}
+if ($psv.Major -lt 5) {
+    Write-Host "[NOTE] Running on PowerShell $psv (4.x). Supported; confirm a heartbeat appears after the update." -ForegroundColor Yellow
+}
+
 function Ensure-CollectorRootTrusted {
     # Repair/prevent the PartialChain TLS failure that silently kills the SYSTEM
     # heartbeat agent on freshly-provisioned boxes whose LocalMachine Root store
