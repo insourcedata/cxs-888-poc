@@ -11,8 +11,8 @@ powershell -ExecutionPolicy Bypass -File "C:\CXS\update-cxs-collector.ps1" -Migr
 API_KEY=e208da46d44dcd96f4ff1732f85ed306
 ```
 
-
-```  1. Scheduled tasks weren't actually created
+```
+  1. Scheduled tasks weren't actually created
 
   The installer might have reported success but failed silently when creating the tasks.
 
@@ -29,7 +29,7 @@ API_KEY=e208da46d44dcd96f4ff1732f85ed306
   # Try to run manually
   Start-ScheduledTask -TaskName "CXS Agent Heartbeat - ACCBBR"
   # Wait 10 seconds, then check logs
-  Get-Content C:\CXS\logs\agent.log -Tail 20
+  Get-Content C:\CXS\logs\agent-ACCBBR.log -Tail 20
 
   3. Folder permission issue
 
@@ -68,6 +68,5 @@ API_KEY=e208da46d44dcd96f4ff1732f85ed306
   # 3. Try running heartbeat manually
   C:\CXS\cxs-agent-ACCBBR.ps1
   Start-Sleep 5
-  Get-Content C:\CXS\logs\agent.log -Tail 10
-
-```
+  Get-Content C:\CXS\logs\agent-ACCBBR.log -Tail 10
+  ```

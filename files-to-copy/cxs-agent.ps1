@@ -288,7 +288,7 @@ function Send-Heartbeat {
 
 $ALLOWED_COMMANDS = @(
     'get-logs', 'get-db-state', 're-sync', 'update-config', 'set-sync-time',
-    'get-config', 'test-connectivity', 'get-skip-report'
+    'get-config', 'test-connectivity', 'get-skip-report', 'rotate-key'
 )
 
 function Invoke-AgentCommand {
@@ -385,6 +385,25 @@ public class TrustAllCertsPolicy : ICertificatePolicy {
         # process boundary - dot-access works on both types.
         if ($commandType -eq 'update-config' -and $null -ne $result -and $result.updated) {
             $Config[[string]$result.key] = $result.newValue
+        }
+
+        # rotate-key: the handler wrote the new key to disk inside a child
+        # process (Start-Job), so the parent's in-memory $Config.ApiKey is
+        # stale.  Re-read it from disk BEFORE Send-CommandResult so the
+        # result POST authenticates with the NEW key - that triggers the
+        # collector's issued->active flip immediately.
+        if ($commandType -eq 'rotate-key' -and $null -ne $result -and $result.rotated) {
+            try {
+                $cf = if ($env:CXS_CONFIG_FILE) { $env:CXS_CONFIG_FILE } else { "C:\CXS\config\cxs-agent.json" }
+                $reloaded = Get-Content $cf -Raw | ConvertFrom-Json
+                if ($reloaded.ApiKey) { $Config.ApiKey = $reloaded.ApiKey }
+                else { throw "reloaded config missing ApiKey" }
+                Write-AgentLog "rotate-key: new key applied to in-memory config" -Component "COMMAND"
+            } catch {
+                Write-AgentLog "rotate-key: applied to disk but in-memory reload FAILED ($_). New key is on disk; restart the heartbeat task to load it." -Level "ERROR" -Component "COMMAND"
+                Send-CommandResult -CommandId $commandId -Status "failed" -ErrorMessage "rotate-key: key written to disk but in-memory reload failed; agent still on old key until restart" -DurationMs $stopwatch.ElapsedMilliseconds
+                return
+            }
         }
 
         Write-AgentLog "Command $commandType completed in $($stopwatch.ElapsedMilliseconds)ms" -Component "COMMAND"

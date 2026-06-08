@@ -44,11 +44,20 @@ It should end with `=== Installation Complete ===`.
 
 ## Step 3 - Check it worked
 
+The installer names this store's files per-store (`cxs-agent-<StoreCode>.json`,
+`agent-<StoreCode>.log`). Set `$sc` to the StoreCode you installed, then run the
+rest as-is:
+
 ```powershell
-$sc = (Get-Content C:\CXS\config\cxs-agent.json -Raw | ConvertFrom-Json).StoreCode
-Get-ScheduledTask -TaskName "CXS Daily Sync - $sc","CXS Agent Heartbeat - $sc" | Select-Object TaskName, State
-Start-Sleep 12
-Get-Content C:\CXS\logs\agent.log -Tail 8
+$sc = "DK003"   # <-- change to the StoreCode you installed
+
+Get-ScheduledTask -TaskName "CXS Daily Sync - $sc","CXS Agent Heartbeat - $sc" `
+    -ErrorAction SilentlyContinue | Select-Object TaskName, State
+Start-ScheduledTask -TaskName "CXS Agent Heartbeat - $sc" -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 30
+$log = "C:\CXS\logs\agent-$sc.log"
+if (Test-Path $log) { Get-Content $log -Tail 20 }
+else { "No log yet at $log - the heartbeat task may not be running." }
 ```
 
 You want to see:

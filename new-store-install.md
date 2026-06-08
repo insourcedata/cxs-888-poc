@@ -44,16 +44,30 @@ Want `TcpTestSucceeded : True` and `{"status":"ok"}`.
 - **FortiGuard "Access Blocked" HTML** -> the FortiGate firewall is blocking us.
   Ask the 888 network/security team to whitelist `*.insourcedata.org` on the
   FortiGate web filter. Stop until that's done.
-- **Certificate `PartialChain` error** -> the server is missing Cloudflare's root
-  CA. The agent handles this automatically at runtime; for manual tests use
-  `curl.exe -k`. If the installer itself complains, add `-AllowSelfSignedCert` to
-  the command in Step 3.
+- **Certificate `PartialChain` error** -> the server is missing the collector's
+  root CA in the **machine** certificate store. The installer now imports it
+  automatically (Google Trust Services `GTS Root R4` into `LocalMachine\Root`), so
+  this should self-resolve at Step 3. It matters because the heartbeat agent runs
+  as `SYSTEM` and validates the certificate - if the import is skipped the install
+  still looks fine but the agent silently never reports. `curl.exe -k` only skips
+  the check for this manual test, not for the agent. Last-resort stopgap only:
+  add `-AllowSelfSignedCert` to Step 3 (disables TLS validation - exposes the API
+  key, use only if the CA import failed).
 
 ## Step 3 - Run the installer (fill in this store's details)
 
 Below is DK003 as the example. Change the values for the store you're on.
 The API key is from Arshath. The installer copies the scripts into `C:\CXS`,
 writes the config, and creates both scheduled tasks in one go.
+
+> **Execution policy / GPO note:** the commands set a Process-scope bypass
+> (`Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force`) - it lasts
+> only for this window and the installer's scheduled tasks carry their own
+> `-ExecutionPolicy Bypass`. If scripts still won't run (`...running scripts is
+> disabled on this system`), a Group Policy is enforcing a stricter policy at
+> **MachinePolicy** scope, which a command-line bypass cannot override - run
+> `Get-ExecutionPolicy -List` and ask the domain admin to relax it (e.g.
+> `RemoteSigned`) for these store servers.
 
 **Wendy's:**
 ```powershell
@@ -152,11 +166,20 @@ GO
 
 ## Step 5 - Check it worked
 
+The installer names this store's files per-store (`cxs-agent-<StoreCode>.json`,
+`agent-<StoreCode>.log`). Set `$sc` to the StoreCode you installed in Step 3,
+then run the rest as-is:
+
 ```powershell
-$sc = (Get-Content C:\CXS\config\cxs-agent.json -Raw | ConvertFrom-Json).StoreCode
-Get-ScheduledTask -TaskName "CXS Daily Sync - $sc","CXS Agent Heartbeat - $sc" | Select-Object TaskName, State
-Start-Sleep 12
-Get-Content C:\CXS\logs\agent.log -Tail 8
+$sc = "DK003"   # <-- change to the StoreCode you installed in Step 3
+
+Get-ScheduledTask -TaskName "CXS Daily Sync - $sc","CXS Agent Heartbeat - $sc" `
+    -ErrorAction SilentlyContinue | Select-Object TaskName, State
+Start-ScheduledTask -TaskName "CXS Agent Heartbeat - $sc" -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 30
+$log = "C:\CXS\logs\agent-$sc.log"
+if (Test-Path $log) { Get-Content $log -Tail 20 }
+else { "No log yet at $log - the heartbeat task may not be running." }
 ```
 
 You want to see:
@@ -164,25 +187,42 @@ You want to see:
 - A log line like `Heartbeat sent. SQL=True ...`
 - The store shows up on the dashboard: **Admin -> Agent Fleet** (within ~5 min)
 
+If the log only shows `CXS Agent starting` (no `Heartbeat sent` yet), wait a
+minute and re-run the last two lines - the first heartbeat can take a moment.
+
+If you instead see `Heartbeat failed: ...` in the log, the agent is running but
+can't reach the API - the error text says why (firewall, proxy, certificate, or
+a wrong API key). The scheduled task runs as `NT AUTHORITY\SYSTEM`, so a network
+path that works from your own login may still be blocked for SYSTEM.
+
 If the log says `SQL=False`, SYSTEM still can't get into SQL - redo Step 4.
 
-## Step 6 - First sync + backfill
+## Step 6 - First sync + loading history
 
-Pull a known-good day to confirm data flows end to end (use a recent date that
-has sales):
+**Confirm data flows (quick check).** Run the store's daily sync once - it pulls
+**yesterday** and adds it (no special permission needed):
 ```powershell
-C:\CXS\cxs-collector-DK003.ps1 -StartDate "2026-06-01" -EndDate "2026-06-01"
+C:\CXS\cxs-collector-DK003.ps1
 ```
-Want `POST ok: accepted`. Then check **Admin -> Store Syncs** on the dashboard -
-the store should show `status: ok` with that date.
+Want `POST ok: accepted` (or `no rows — skipping POST` if yesterday had no sales).
+Then check **Admin -> Store Syncs** on the dashboard - the store shows `status: ok`.
 
-To pull history, give a date range (one POST per day, safe to re-run -
-duplicates are skipped):
-```powershell
-C:\CXS\cxs-collector-DK003.ps1 -StartDate "2025-01-01" -EndDate "2025-03-31"
-```
+**Load history / fix a day - from the dashboard, not the box.** To pull a date
+range (initial history, or to re-pull days that look wrong), the CXS team issues a
+**Re-sync** from **Admin -> Agent Fleet -> [this store]** with the start/end dates.
+The agent pulls those days on its next check-in and the dashboard **replaces** each
+day with the fresh copy (so it's safe to re-issue). Do long ranges about a month at
+a time.
+
+> A date-range pull run directly on the box (`cxs-collector-<store>.ps1 -StartDate
+> ... -EndDate ...`) is now **rejected** by the server unless a matching dashboard
+> Re-sync authorized it - this stops a store from wiping its own history by
+> accident. Always start backfills from the dashboard. See
+> **`how-to-fix-a-stores-old-numbers.md`**.
+
 The agent can only return what the store's POS still keeps - if older dates come
-back empty, that data isn't on the POS anymore.
+back empty (or a day shows `failed` with "no rows"), that data isn't on the POS
+anymore.
 
 ---
 
@@ -198,7 +238,7 @@ back empty, that data isn't on the POS anymore.
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
 | FortiGuard "Access Blocked" HTML | Firewall blocking unrated domain | Whitelist `*.insourcedata.org` on FortiGate |
-| `PartialChain` certificate error | Missing Cloudflare root CA | Agent handles it at runtime; manual tests use `curl.exe -k`; installer can take `-AllowSelfSignedCert` |
+| `PartialChain` certificate error | Box missing the collector root CA in the **machine** store; the SYSTEM agent validates certs | Installer auto-imports `GTS Root R4` into `LocalMachine\Root`; if it failed, re-run install/update. `curl.exe -k` only bypasses manual tests, not the agent. Stopgap: `-AllowSelfSignedCert` |
 | `Login failed for user 'NT AUTHORITY\SYSTEM'` | SYSTEM has no SQL access | Do Step 4 |
 | Heartbeat log shows `SQL=False` | Same as above | Do Step 4 |
 | `ERROR querying headers` | SQL Server not reachable | Check the SQL service, instance name, and database |
@@ -206,9 +246,9 @@ back empty, that data isn't on the POS anymore.
 | `no rows — skipping POST` | That day had no transactions | Try a date you know has sales |
 | Sync runs but 0 rows | Wrong database or table names | Re-check Brand / Database; for Conti's confirm Company/ExtGuid |
 | `Unauthorized` (401) | Wrong API key | Confirm the key from Arshath |
-| Store not on Agent Fleet | Heartbeat task not running | `Get-ScheduledTask "CXS Agent Heartbeat - <StoreCode>"` -> `Start-ScheduledTask`; check `C:\CXS\logs\agent.log` |
+| Store not on Agent Fleet | Heartbeat task not running, or SYSTEM can't reach the API | `Get-ScheduledTask "CXS Agent Heartbeat - <StoreCode>"` -> `Start-ScheduledTask`; read `C:\CXS\logs\agent-<StoreCode>.log` for the real error |
 
 ## Notes
 - Copy files to `C:\Temp\store-agent`, never into `C:\CXS`.
-- Logs: daily sync `C:\CXS\logs\sync-<StoreCode>.log`, heartbeat `C:\CXS\logs\agent.log`.
+- Logs: daily sync `C:\CXS\logs\sync-<StoreCode>.log`, heartbeat `C:\CXS\logs\agent-<StoreCode>.log`.
   Send the relevant file to Arshath when troubleshooting.

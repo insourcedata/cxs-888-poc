@@ -12,8 +12,9 @@ and remote command execution on top of the existing nightly sync.
 - Remote command execution: the CXS admin team can issue diagnostic
   commands (test connectivity, pull logs, trigger re-sync, etc.)
   from the central dashboard without needing RDP access.
-- A per-store config file (`C:\CXS\config\cxs-agent.json`) that both
-  the heartbeat and the daily sync read.
+- A per-store config file that both the heartbeat and the daily sync
+  read (`C:\CXS\config\cxs-agent-<StoreCode>.json` as of this release -
+  see "What's new" below). One server can now host multiple stores.
 
 **What does NOT change:**
 - The nightly sync behavior is unchanged. The collector script
@@ -23,6 +24,52 @@ and remote command execution on top of the existing nightly sync.
   unaffected.
 - The daily sync task timing is preserved by the updater ("Does not
   touch scheduled task timing").
+
+---
+
+## What's new in this update (multi-store support)
+
+This release lets **one server host more than one store** cleanly. Before, every
+store on a box shared a single `cxs-agent.json`, so the last store installed
+"won" and the others reported under the wrong identity. Now each store gets:
+
+- its own config file: **`C:\CXS\config\cxs-agent-<StoreCode>.json`**
+- its own launcher: `C:\CXS\cxs-agent-<StoreCode>.ps1` (a tiny generated file the
+  heartbeat task runs; it points the shared agent at that store's config)
+- its own logs: `C:\CXS\logs\agent-<StoreCode>.log` and `sync-<StoreCode>.log`
+
+> **Read this:** wherever the rest of this guide says `cxs-agent.json`, on this
+> release it is **`cxs-agent-<StoreCode>.json`** (one per store). The migration
+> steps below are otherwise identical - the updater produces the per-store files
+> for you automatically.
+
+**Single-store servers:** nothing changes for you except the filename now carries
+the store code. Just run the updater (Section 3) as normal.
+
+**Servers that will host a second store:** first run the updater on the existing
+store (Section 3), then install the additional store with
+`install-cxs-collector.ps1` exactly as in **`new-store-install.md`**, using that
+store's own StoreCode / SqlServer / Database. The two stores are fully
+independent.
+
+The old shared `C:\CXS\config\cxs-agent.json` is intentionally left in place
+(harmless) so the previous setup keeps working during the change.
+
+---
+
+## Also new: dashboard-managed API keys
+
+This release also adds a `rotate-key` command handler. Once a store is on this
+update, the CXS team can issue and rotate that store's **own** collector API key
+straight from the dashboard: the agent fetches the new key, applies it, and
+switches over on its own - **no box visit, no downtime**.
+
+You do not run anything extra for this. It deploys automatically when you run the
+updater (Section 3), which copies the new command into `C:\CXS\commands\`. After
+the update, the CXS team does the rest from their side.
+
+Hand-applying a key on the box (see `rotate-store-api-key.md`) is now only a
+**fallback** for stores that cannot use the dashboard method.
 
 ---
 
@@ -97,7 +144,7 @@ The folder must contain all of these (the updater needs them together):
 | `update-cxs-collector.ps1` | The updater script you will run |
 | `cxs-collector.ps1` | New collector template (updater injects config into this) |
 | `cxs-agent.ps1` | Heartbeat agent (copied to `C:\CXS\`) |
-| `commands\*.ps1` | 7 remote command handlers (copied to `C:\CXS\commands\`) |
+| `commands\*.ps1` | 8 remote command handlers incl. `rotate-key` (copied to `C:\CXS\commands\`) |
 
 > **Important:** Do not copy only the updater. It exits with an error
 > if `cxs-collector.ps1` is missing from the same directory, and the
