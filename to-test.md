@@ -101,3 +101,9 @@ API_KEY=e208da46d44dcd96f4ff1732f85ed306
   # 4. List all files in CXS to see what exists
   Get-ChildItem C:\CXS -Recurse | Select-Object FullName, LastWriteTime
 ```
+
+```
+cd C:\CXS
+  $env:CXS_CONFIG_FILE = "C:\CXS\config\cxs-agent-ACCBBR.json"
+  powershell -ExecutionPolicy Bypass -File .\cxs-agent.ps1
+```
