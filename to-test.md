@@ -70,3 +70,20 @@ API_KEY=e208da46d44dcd96f4ff1732f85ed306
   Start-Sleep 5
   Get-Content C:\CXS\logs\agent-ACCBBR.log -Tail 10
   ```
+
+
+```
+  Force it to run NOW:
+
+  # Trigger immediately
+  Start-ScheduledTask -TaskName "CXS Agent Heartbeat - ACCBBR"
+
+  # Wait for execution
+  Start-Sleep 15
+
+  # Check if it ran
+  Get-ScheduledTaskInfo -TaskName "CXS Agent Heartbeat - ACCBBR" | Select-Object LastRunTime, LastTaskResult
+
+  # Check logs
+  Get-Content C:\CXS\logs\agent.log -Tail 30 -ErrorAction SilentlyContinue
+```
