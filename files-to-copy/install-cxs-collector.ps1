@@ -152,6 +152,39 @@ $ScriptName = "cxs-collector-$StoreCode.ps1"
 $TaskName   = "CXS Daily Sync - $StoreCode"
 $HeartbeatTaskName = "CXS Agent Heartbeat - $StoreCode"
 
+function Ensure-CollectorRootTrusted {
+    # Repair/prevent the PartialChain TLS failure that silently kills the SYSTEM
+    # heartbeat agent on freshly-provisioned boxes whose LocalMachine Root store
+    # lacks the collector's CA. Imports the pinned Google Trust Services
+    # "GTS Root R4" root (the collector's chain anchor) into LocalMachine\Root so
+    # the SYSTEM agent's TLS validation SUCCEEDS without disabling it. Idempotent,
+    # thumbprint-pinned, never weakens TLS.
+    param([Parameter(Mandatory)][string]$ScriptRoot)
+    $thumb = '77D30367B5E00C15F60C3861DF7CE13B92464D47'   # GTS Root R4 (self-signed, pki.goog)
+    try {
+        if (Test-Path "Cert:\LocalMachine\Root\$thumb") {
+            Write-Host "  [OK] Collector root CA already trusted in the machine store (GTS Root R4)." -ForegroundColor Green
+            return
+        }
+        $certPath = Join-Path $ScriptRoot "certs\gts-root-r4.crt"
+        if (-not (Test-Path $certPath)) {
+            Write-Host "  [WARN] Bundled root CA not found at $certPath - cannot auto-trust. If the box hits PartialChain, re-run with -AllowSelfSignedCert." -ForegroundColor Yellow
+            return
+        }
+        $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 $certPath
+        if ($cert.Thumbprint -ne $thumb) {
+            Write-Host "  [WARN] Bundled root CA thumbprint mismatch (got $($cert.Thumbprint)); refusing to import." -ForegroundColor Red
+            return
+        }
+        $store = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root','LocalMachine')
+        $store.Open('ReadWrite'); $store.Add($cert); $store.Close()
+        Write-Host "  [OK] Imported collector root CA into LocalMachine\Root (GTS Root R4) - SYSTEM can now validate the collector cert." -ForegroundColor Green
+    } catch {
+        Write-Host "  [WARN] Could not import the collector root CA: $_" -ForegroundColor Yellow
+        Write-Host "         If the SYSTEM heartbeat then fails with PartialChain, re-run with -AllowSelfSignedCert as a stopgap." -ForegroundColor Yellow
+    }
+}
+
 Write-Host ""
 Write-Host "=== CXS Collector Installer ===" -ForegroundColor Cyan
 Write-Host ""
@@ -233,6 +266,8 @@ Write-Host "  Agent config written to: $agentConfigPath" -ForegroundColor Green
 
 # 3. Test SQL + send install checkin to collector
 Write-Host "[3/4] Testing SQL + sending install checkin..."
+Write-Host "  Ensuring the collector root CA is trusted in the machine store..."
+Ensure-CollectorRootTrusted -ScriptRoot $PSScriptRoot
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 if ($AllowSelfSignedCert) {
     if (-not ([System.Management.Automation.PSTypeName]'TrustAllCertsPolicy').Type) {
@@ -416,6 +451,31 @@ Register-ScheduledTask `
 
 Start-ScheduledTask -TaskName $HeartbeatTaskName
 Write-Host "  [OK] Heartbeat task created and started: $HeartbeatTaskName" -ForegroundColor Green
+
+# Verify the heartbeat actually works in the SYSTEM context (the agent's real
+# context - different cert/proxy than the interactive operator). A green install
+# checkin does NOT prove this, so confirm against the agent's own log and warn
+# loudly instead of leaving the store silently dark.
+Write-Host "  Verifying heartbeat in the SYSTEM context..."
+$agentLog = "C:\CXS\logs\agent-$StoreCode.log"
+$deadline = (Get-Date).AddSeconds(45); $hbOk = $false; $hbErr = $null
+while ((Get-Date) -lt $deadline) {
+    Start-Sleep -Seconds 5
+    if (Test-Path $agentLog) {
+        $tail = Get-Content $agentLog -Tail 40 -ErrorAction SilentlyContinue
+        if ($tail -match 'Heartbeat sent') { $hbOk = $true; break }
+        $m = $tail | Select-String 'PartialChain|establish trust|SSL/TLS|\b407\b|Unauthorized|Unable to connect|timed out' | Select-Object -Last 1
+        if ($m) { $hbErr = $m.ToString().Trim() }
+    }
+}
+if ($hbOk) {
+    Write-Host "  [OK] SYSTEM-context heartbeat confirmed - store is reporting." -ForegroundColor Green
+} else {
+    Write-Host "  [WARN] Heartbeat NOT confirmed as SYSTEM within 45s - this store will not report." -ForegroundColor Red
+    if ($hbErr) { Write-Host "         Agent log: $hbErr" -ForegroundColor Red }
+    Write-Host "         Check: Get-Content $agentLog -Tail 60 ; certutil -store Root ; netsh winhttp show proxy" -ForegroundColor Yellow
+    Write-Host "         Stopgap: re-run with -AllowSelfSignedCert." -ForegroundColor Yellow
+}
 
 # Done
 Write-Host ""

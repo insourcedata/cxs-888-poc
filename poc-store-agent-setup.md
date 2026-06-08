@@ -51,6 +51,14 @@ Right-click the Windows Start menu → **Windows PowerShell (Admin)**
 
 **Validate:** The PowerShell window title shows `Administrator`.
 
+**Allow this session to run the scripts:**
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+```
+This is a Process-scope bypass - it lasts only for this PowerShell window and does not change the machine's policy; the scheduled tasks the installer creates carry their own `-ExecutionPolicy Bypass`.
+
+> **If scripts still won't run** (`... cannot be loaded because running scripts is disabled on this system`): a Group Policy is enforcing an execution policy at **MachinePolicy** scope, which **overrides** a command-line `-ExecutionPolicy Bypass`. Run `Get-ExecutionPolicy -List`; if `MachinePolicy`/`UserPolicy` is `Restricted` or `AllSigned`, ask the domain/AD admin to relax it (e.g. `RemoteSigned`) for these store servers before installing.
+
 ---
 
 ## Step 3: Create the CXS Directory

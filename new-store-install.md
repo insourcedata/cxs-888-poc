@@ -44,16 +44,30 @@ Want `TcpTestSucceeded : True` and `{"status":"ok"}`.
 - **FortiGuard "Access Blocked" HTML** -> the FortiGate firewall is blocking us.
   Ask the 888 network/security team to whitelist `*.insourcedata.org` on the
   FortiGate web filter. Stop until that's done.
-- **Certificate `PartialChain` error** -> the server is missing Cloudflare's root
-  CA. The agent handles this automatically at runtime; for manual tests use
-  `curl.exe -k`. If the installer itself complains, add `-AllowSelfSignedCert` to
-  the command in Step 3.
+- **Certificate `PartialChain` error** -> the server is missing the collector's
+  root CA in the **machine** certificate store. The installer now imports it
+  automatically (Google Trust Services `GTS Root R4` into `LocalMachine\Root`), so
+  this should self-resolve at Step 3. It matters because the heartbeat agent runs
+  as `SYSTEM` and validates the certificate - if the import is skipped the install
+  still looks fine but the agent silently never reports. `curl.exe -k` only skips
+  the check for this manual test, not for the agent. Last-resort stopgap only:
+  add `-AllowSelfSignedCert` to Step 3 (disables TLS validation - exposes the API
+  key, use only if the CA import failed).
 
 ## Step 3 - Run the installer (fill in this store's details)
 
 Below is DK003 as the example. Change the values for the store you're on.
 The API key is from Arshath. The installer copies the scripts into `C:\CXS`,
 writes the config, and creates both scheduled tasks in one go.
+
+> **Execution policy / GPO note:** the commands set a Process-scope bypass
+> (`Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force`) - it lasts
+> only for this window and the installer's scheduled tasks carry their own
+> `-ExecutionPolicy Bypass`. If scripts still won't run (`...running scripts is
+> disabled on this system`), a Group Policy is enforcing a stricter policy at
+> **MachinePolicy** scope, which a command-line bypass cannot override - run
+> `Get-ExecutionPolicy -List` and ask the domain admin to relax it (e.g.
+> `RemoteSigned`) for these store servers.
 
 **Wendy's:**
 ```powershell
@@ -224,7 +238,7 @@ anymore.
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
 | FortiGuard "Access Blocked" HTML | Firewall blocking unrated domain | Whitelist `*.insourcedata.org` on FortiGate |
-| `PartialChain` certificate error | Missing Cloudflare root CA | Agent handles it at runtime; manual tests use `curl.exe -k`; installer can take `-AllowSelfSignedCert` |
+| `PartialChain` certificate error | Box missing the collector root CA in the **machine** store; the SYSTEM agent validates certs | Installer auto-imports `GTS Root R4` into `LocalMachine\Root`; if it failed, re-run install/update. `curl.exe -k` only bypasses manual tests, not the agent. Stopgap: `-AllowSelfSignedCert` |
 | `Login failed for user 'NT AUTHORITY\SYSTEM'` | SYSTEM has no SQL access | Do Step 4 |
 | Heartbeat log shows `SQL=False` | Same as above | Do Step 4 |
 | `ERROR querying headers` | SQL Server not reachable | Check the SQL service, instance name, and database |
