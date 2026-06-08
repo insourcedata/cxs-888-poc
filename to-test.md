@@ -87,3 +87,17 @@ API_KEY=e208da46d44dcd96f4ff1732f85ed306
   # Check logs
   Get-Content C:\CXS\logs\agent.log -Tail 30 -ErrorAction SilentlyContinue
 ```
+
+```
+  # 1. Check if the task actually exists
+  Get-ScheduledTask -TaskName "CXS Agent Heartbeat - ACCBBR" | Format-List
+
+  # 2. Check if it's running
+  Get-ScheduledTaskInfo -TaskName "CXS Agent Heartbeat - ACCBBR" | Select-Object LastRunTime, LastTaskResult, NextRunTime
+
+  # 3. Check the correct log file (per-store name)
+  Get-Content "C:\CXS\logs\agent-ACCBBR.log" -Tail 50 -ErrorAction SilentlyContinue
+
+  # 4. List all files in CXS to see what exists
+  Get-ChildItem C:\CXS -Recurse | Select-Object FullName, LastWriteTime
+```
