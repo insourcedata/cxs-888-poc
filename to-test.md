@@ -107,3 +107,10 @@ cd C:\CXS
   $env:CXS_CONFIG_FILE = "C:\CXS\config\cxs-agent-ACCBBR.json"
   powershell -ExecutionPolicy Bypass -File .\cxs-agent.ps1
 ```
+
+```
+cd C:\Temp\store-agent
+  Get-ChildItem -Path "." -Recurse | Unblock-File
+  Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+  .\install-cxs-collector.ps1 -Brand "contis" -ApiUrl "https://888.insourcedata.org/api/collect" -ApiKey "e208da46d44dcd96f4ff1732f85ed306" -SqlServer "BBRSERVER1" -Database "ACCBBRDB" -StoreCode "ACCBBR"
+```
