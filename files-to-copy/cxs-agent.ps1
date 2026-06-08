@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+#Requires -Version 4.0
 <#
 .SYNOPSIS
     CXS Agent Heartbeat - sends periodic health + sync telemetry to the fleet dashboard.
@@ -83,7 +83,7 @@ $AgentVersion = "2.1.0"
 $AgentId = "$($Config.Brand):$($Config.StoreCode)"
 
 # --- TLS setup -------------------------------------------------------------------
-# Force TLS 1.2 (PowerShell 5.1 defaults to TLS 1.0 which most servers reject).
+# Force TLS 1.2 (Windows PowerShell 4.0/5.1 default to TLS 1.0 which most servers reject).
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 # Cert validation is ON by default. AllowSelfSignedCert is an explicit opt-in
@@ -277,7 +277,7 @@ function Send-Heartbeat {
     # Invoke-RestMethod throws on non-2xx; let the caller catch so the main
     # loop can adjust its backoff. Returns the parsed JSON response so the
     # caller can process pending commands.
-    $response = Invoke-RestMethod -Uri $heartbeatUrl -Method POST -Body $json -Headers $headers -TimeoutSec 30
+    $response = Invoke-RestMethod -UseBasicParsing -Uri $heartbeatUrl -Method POST -Body $json -Headers $headers -TimeoutSec 30
 
     Write-AgentLog "Heartbeat sent. SQL=$($health.sqlConnected) CPU=$($health.cpuPercent)%"
 
@@ -447,7 +447,7 @@ function Send-CommandResult {
     $maxAttempts = 3
     for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
         try {
-            Invoke-RestMethod -Uri $callbackUrl -Method POST -Body $json -Headers $headers -TimeoutSec 30 | Out-Null
+            Invoke-RestMethod -UseBasicParsing -Uri $callbackUrl -Method POST -Body $json -Headers $headers -TimeoutSec 30 | Out-Null
             return
         } catch {
             if ($attempt -lt $maxAttempts) {

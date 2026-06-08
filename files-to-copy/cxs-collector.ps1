@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+#Requires -Version 4.0
 <#
 .SYNOPSIS
     CXS Store Data Collector - queries local LS Central SQL Server and sends data to CXS dashboard.
@@ -42,7 +42,7 @@
     .\cxs-collector.ps1 -StartDate "2026-04-09" -EndDate "2026-04-09"
 
 .NOTES
-    Language: PowerShell 5.1 (pre-installed on all Windows Server)
+    Language: Windows PowerShell 4.0+ (Server 2012 ships 4.0; 5.1 where available)
     Auth:     Windows Authentication to local SQL Server
     Transport: HTTPS POST to CXS collector API
 #>
@@ -112,7 +112,7 @@ if (Test-Path $ConfigFile) {
 if ($env:CXS_API_KEY) { $Config.ApiKey = $env:CXS_API_KEY }
 
 # --- TLS setup -----------------------------------------------------------------
-# Force TLS 1.2 (PowerShell 5.1 defaults to TLS 1.0 which most servers reject)
+# Force TLS 1.2 (Windows PowerShell 4.0/5.1 default to TLS 1.0 which most servers reject)
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 # Cert validation is ON by default. AllowSelfSignedCert is an explicit
@@ -248,7 +248,7 @@ function Send-Checkin {
         }
         # Derive checkin URL from ApiUrl
         $checkinUrl = $Config.ApiUrl -replace '/api/collect$', '/api/collect/checkin'
-        Invoke-RestMethod -Uri $checkinUrl -Method POST -Body $json -Headers $hdrs -TimeoutSec 15 | Out-Null
+        Invoke-RestMethod -UseBasicParsing -Uri $checkinUrl -Method POST -Body $json -Headers $hdrs -TimeoutSec 15 | Out-Null
     }
     catch {
         Write-Log "  [checkin] Failed to send telemetry: $_"
@@ -458,7 +458,7 @@ function Invoke-DaySync {
             "X-Store-Code"  = $Config.StoreCode
         }
 
-        $response = Invoke-RestMethod -Uri $Config.ApiUrl -Method POST -Body $json -Headers $headers -TimeoutSec 120
+        $response = Invoke-RestMethod -UseBasicParsing -Uri $Config.ApiUrl -Method POST -Body $json -Headers $headers -TimeoutSec 120
 
         Write-Log "  [$Day] POST ok: $($response.status)"
 
