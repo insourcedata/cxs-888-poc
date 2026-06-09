@@ -324,10 +324,17 @@ exit `$LASTEXITCODE
 
     $hbPrincipal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
 
+    # The heartbeat agent is a persistent forever-loop. Without -ExecutionTimeLimit,
+    # New-ScheduledTaskSettingsSet defaults to PT72H, so Task Scheduler force-stops it
+    # after 3 days and it stays dark until reboot/reinstall (the -AtStartup trigger only
+    # re-runs at boot; -RestartCount covers action failures, not a time-limit stop).
+    # [TimeSpan]::Zero => PT0S = "run indefinitely". The daily collector task is
+    # short-lived, so it intentionally keeps the default limit.
     $hbSettings = New-ScheduledTaskSettingsSet `
         -AllowStartIfOnBatteries `
         -DontStopIfGoingOnBatteries `
         -StartWhenAvailable `
+        -ExecutionTimeLimit ([TimeSpan]::Zero) `
         -RestartCount 3 `
         -RestartInterval (New-TimeSpan -Minutes 10)
 
@@ -341,6 +348,21 @@ exit `$LASTEXITCODE
 
     Start-ScheduledTask -TaskName $hbTaskName
     Write-Host "  [OK] Heartbeat task created and started: $hbTaskName" -ForegroundColor Green
+
+    # Read-back self-check: confirm Task Scheduler actually persisted the unlimited
+    # ExecutionTimeLimit. Some Server 2012 / PS 4.0 CIM paths can drop a zero TimeSpan
+    # to a finite default; a finite PTnn here means the 3-day force-stop bug silently
+    # survived and the store would go dark again in ~3 days. Good = PT0S or empty/null.
+    try {
+        $hbEtl = (Get-ScheduledTask -TaskName $hbTaskName).Settings.ExecutionTimeLimit
+        if ([string]::IsNullOrEmpty($hbEtl) -or $hbEtl -eq "PT0S") {
+            Write-Host "  [OK] Heartbeat ExecutionTimeLimit = '$hbEtl' (no 3-day force-stop)." -ForegroundColor Green
+        } else {
+            Write-Host "  [WARN] Heartbeat ExecutionTimeLimit = '$hbEtl' (expected PT0S/none) - Task Scheduler may force-stop the agent after that limit, taking the store dark. Verify: Export-ScheduledTask -TaskName '$hbTaskName'" -ForegroundColor Red
+        }
+    } catch {
+        Write-Host "  [WARN] Could not read back heartbeat ExecutionTimeLimit: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
 
     # Verify the heartbeat actually works in the SYSTEM context (the agent's real
     # context - different cert/proxy than the interactive operator). A green install

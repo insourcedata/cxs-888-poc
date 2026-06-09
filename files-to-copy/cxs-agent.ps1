@@ -127,11 +127,16 @@ function Write-AgentLog {
     $line = "[$ts] [$Level] [$Component] $Message"
     Write-Host $line
 
-    $logDir = Split-Path $Config.LogFile -Parent
-    if (-not (Test-Path $logDir)) {
-        New-Item -ItemType Directory -Path $logDir -Force | Out-Null
-    }
-    Add-Content -Path $Config.LogFile -Value $line
+    # Best-effort file write: a transient lock (e.g. AV scan) or a perms/disk issue
+    # on the log file must NEVER throw out of the agent's forever-loop and kill the
+    # process. Console output above already happened; swallow file-write failures.
+    try {
+        $logDir = Split-Path $Config.LogFile -Parent
+        if ($logDir -and -not (Test-Path $logDir)) {
+            New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+        }
+        Add-Content -Path $Config.LogFile -Value $line -ErrorAction Stop
+    } catch { }
 }
 
 # --- Helpers ---------------------------------------------------------------------
@@ -478,35 +483,51 @@ $MaxBackoffSec = 30 * 60   # 30 minutes
 $ConsecutiveFailures = 0
 
 while ($true) {
-    $ok = $false
+    # Outer guard: this agent is a forever-loop registered as a Scheduled Task that
+    # does NOT auto-restart until the box reboots. Any unhandled error in an iteration
+    # must never terminate the process, or the store goes silently dark. The inner
+    # try/catch handles heartbeat failures with backoff; this outer one is the
+    # last-resort net for everything else (logging, jitter math, Start-Sleep).
     try {
-        $response = Send-Heartbeat
-        $ok = $true
+        $ok = $false
+        try {
+            $response = Send-Heartbeat
+            $ok = $true
 
-        # Process pending commands from server
-        if ($response.commands -and $response.commands.Count -gt 0) {
-            Write-AgentLog "Received $($response.commands.Count) command(s)" -Component "COMMAND"
-            foreach ($cmd in $response.commands) {
-                Invoke-AgentCommand -Command $cmd
+            # Process pending commands from server
+            if ($response.commands -and $response.commands.Count -gt 0) {
+                Write-AgentLog "Received $($response.commands.Count) command(s)" -Component "COMMAND"
+                foreach ($cmd in $response.commands) {
+                    Invoke-AgentCommand -Command $cmd
+                }
             }
+        } catch {
+            Write-AgentLog "Heartbeat failed: $_" -Level "ERROR"
         }
+
+        if ($ok) {
+            $ConsecutiveFailures = 0
+            $base = [int]$Config.HeartbeatInterval
+        } else {
+            $ConsecutiveFailures++
+            # Exponential backoff capped at $MaxBackoffSec
+            $backoff = [int]$Config.HeartbeatInterval * [Math]::Pow(2, [Math]::Min($ConsecutiveFailures, 5))
+            $base = [Math]::Min([int]$backoff, $MaxBackoffSec)
+            Write-AgentLog "Backing off ${base}s after $ConsecutiveFailures consecutive failures." -Level "WARN"
+        }
+
+        # Clamp to a sane floor (30s) so a misconfigured HeartbeatInterval (e.g. 0)
+        # can't make Get-Random (equal min/max) or Start-Sleep throw and kill the loop.
+        $base = [Math]::Max([int]$base, 30)
+
+        # +/-10% jitter so 800 stores rebooting at the same time don't synchronize
+        # their heartbeats and pile up on the collector.
+        $jitterMax = [Math]::Max(1, [int]($base * 0.1))
+        $jitter = Get-Random -Minimum (-$jitterMax) -Maximum $jitterMax
+        Start-Sleep -Seconds ($base + $jitter)
     } catch {
-        Write-AgentLog "Heartbeat failed: $_" -Level "ERROR"
+        # Best-effort log, then pause and continue - never exit the loop.
+        try { Write-AgentLog "Unexpected error in heartbeat loop: $_" -Level "ERROR" } catch { }
+        Start-Sleep -Seconds 60
     }
-
-    if ($ok) {
-        $ConsecutiveFailures = 0
-        $base = [int]$Config.HeartbeatInterval
-    } else {
-        $ConsecutiveFailures++
-        # Exponential backoff capped at $MaxBackoffSec
-        $backoff = [int]$Config.HeartbeatInterval * [Math]::Pow(2, [Math]::Min($ConsecutiveFailures, 5))
-        $base = [Math]::Min([int]$backoff, $MaxBackoffSec)
-        Write-AgentLog "Backing off ${base}s after $ConsecutiveFailures consecutive failures." -Level "WARN"
-    }
-
-    # ?10% jitter so 800 stores rebooting at the same time don't synchronize
-    # their heartbeats and pile up on the collector.
-    $jitter = Get-Random -Minimum (-[int]($base * 0.1)) -Maximum ([int]($base * 0.1))
-    Start-Sleep -Seconds ($base + $jitter)
 }
