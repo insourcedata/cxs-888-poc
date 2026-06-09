@@ -115,6 +115,15 @@ if ($env:CXS_API_KEY) { $Config.ApiKey = $env:CXS_API_KEY }
 # Force TLS 1.2 (Windows PowerShell 4.0/5.1 default to TLS 1.0 which most servers reject)
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+# -UseBasicParsing exists on Invoke-RestMethod only in PS 5.0+ (PS 4.0 has it on
+# Invoke-WebRequest but NOT Invoke-RestMethod). Splat it conditionally so the same
+# call is valid on Windows PowerShell 4.0 and keeps the basic-parsing guard on 5.1
+# (which also avoids the IE-engine parse error under the SYSTEM service account).
+$CxsIrmArgs = @{}
+if ((Get-Command Invoke-RestMethod).Parameters.ContainsKey('UseBasicParsing')) {
+    $CxsIrmArgs['UseBasicParsing'] = $true
+}
+
 # Cert validation is ON by default. AllowSelfSignedCert is an explicit
 # escape hatch for installs whose root-CA store is missing Cloudflare's chain.
 if ($Config.AllowSelfSignedCert) {
@@ -248,7 +257,7 @@ function Send-Checkin {
         }
         # Derive checkin URL from ApiUrl
         $checkinUrl = $Config.ApiUrl -replace '/api/collect$', '/api/collect/checkin'
-        Invoke-RestMethod -UseBasicParsing -Uri $checkinUrl -Method POST -Body $json -Headers $hdrs -TimeoutSec 15 | Out-Null
+        Invoke-RestMethod @CxsIrmArgs -Uri $checkinUrl -Method POST -Body $json -Headers $hdrs -TimeoutSec 15 | Out-Null
     }
     catch {
         Write-Log "  [checkin] Failed to send telemetry: $_"
@@ -458,7 +467,7 @@ function Invoke-DaySync {
             "X-Store-Code"  = $Config.StoreCode
         }
 
-        $response = Invoke-RestMethod -UseBasicParsing -Uri $Config.ApiUrl -Method POST -Body $json -Headers $headers -TimeoutSec 120
+        $response = Invoke-RestMethod @CxsIrmArgs -Uri $Config.ApiUrl -Method POST -Body $json -Headers $headers -TimeoutSec 120
 
         Write-Log "  [$Day] POST ok: $($response.status)"
 

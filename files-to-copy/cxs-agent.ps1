@@ -86,6 +86,15 @@ $AgentId = "$($Config.Brand):$($Config.StoreCode)"
 # Force TLS 1.2 (Windows PowerShell 4.0/5.1 default to TLS 1.0 which most servers reject).
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+# -UseBasicParsing exists on Invoke-RestMethod only in PS 5.0+ (PS 4.0 has it on
+# Invoke-WebRequest but NOT Invoke-RestMethod). Splat it conditionally so the same
+# call is valid on Windows PowerShell 4.0 and keeps the basic-parsing guard on 5.1
+# (which also avoids the IE-engine parse error under the SYSTEM service account).
+$CxsIrmArgs = @{}
+if ((Get-Command Invoke-RestMethod).Parameters.ContainsKey('UseBasicParsing')) {
+    $CxsIrmArgs['UseBasicParsing'] = $true
+}
+
 # Cert validation is ON by default. AllowSelfSignedCert is an explicit opt-in
 # escape hatch for stores whose root-CA store is missing Cloudflare's chain -
 # see install runbook. Never enable globally.
@@ -277,7 +286,7 @@ function Send-Heartbeat {
     # Invoke-RestMethod throws on non-2xx; let the caller catch so the main
     # loop can adjust its backoff. Returns the parsed JSON response so the
     # caller can process pending commands.
-    $response = Invoke-RestMethod -UseBasicParsing -Uri $heartbeatUrl -Method POST -Body $json -Headers $headers -TimeoutSec 30
+    $response = Invoke-RestMethod @CxsIrmArgs -Uri $heartbeatUrl -Method POST -Body $json -Headers $headers -TimeoutSec 30
 
     Write-AgentLog "Heartbeat sent. SQL=$($health.sqlConnected) CPU=$($health.cpuPercent)%"
 
@@ -447,7 +456,7 @@ function Send-CommandResult {
     $maxAttempts = 3
     for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
         try {
-            Invoke-RestMethod -UseBasicParsing -Uri $callbackUrl -Method POST -Body $json -Headers $headers -TimeoutSec 30 | Out-Null
+            Invoke-RestMethod @CxsIrmArgs -Uri $callbackUrl -Method POST -Body $json -Headers $headers -TimeoutSec 30 | Out-Null
             return
         } catch {
             if ($attempt -lt $maxAttempts) {

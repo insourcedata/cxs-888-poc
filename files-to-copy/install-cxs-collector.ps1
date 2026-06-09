@@ -279,6 +279,14 @@ Write-Host "[3/4] Testing SQL + sending install checkin..."
 Write-Host "  Ensuring the collector root CA is trusted in the machine store..."
 Ensure-CollectorRootTrusted -ScriptRoot $PSScriptRoot
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+# -UseBasicParsing exists on Invoke-RestMethod only in PS 5.0+ (PS 4.0 has it on
+# Invoke-WebRequest but NOT Invoke-RestMethod). Splat it conditionally so this
+# checkin POST is valid on Windows PowerShell 4.0 and keeps the guard on 5.1.
+$CxsIrmArgs = @{}
+if ((Get-Command Invoke-RestMethod).Parameters.ContainsKey('UseBasicParsing')) {
+    $CxsIrmArgs['UseBasicParsing'] = $true
+}
 if ($AllowSelfSignedCert) {
     if (-not ([System.Management.Automation.PSTypeName]'TrustAllCertsPolicy').Type) {
         Add-Type @"
@@ -354,7 +362,7 @@ try {
         "Content-Type"  = "application/json"
         "Authorization" = "Bearer $ApiKey"
     }
-    $response = Invoke-RestMethod -UseBasicParsing -Uri $checkinUrl -Method POST -Body $json -Headers $headers -TimeoutSec 15
+    $response = Invoke-RestMethod @CxsIrmArgs -Uri $checkinUrl -Method POST -Body $json -Headers $headers -TimeoutSec 15
     Write-Host "  [OK] Install checkin sent to collector" -ForegroundColor Green
 }
 catch {

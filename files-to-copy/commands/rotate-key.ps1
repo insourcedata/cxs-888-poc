@@ -35,7 +35,15 @@ $headers = @{
     "Authorization" = "Bearer $($Config.ApiKey)"
 }
 
-$resp = Invoke-RestMethod -UseBasicParsing -Uri $claimUrl -Method POST -Body $body -Headers $headers -TimeoutSec 30
+# -UseBasicParsing exists on Invoke-RestMethod only in PS 5.0+ (PS 4.0 has it on
+# Invoke-WebRequest but NOT Invoke-RestMethod). This handler runs in its own
+# Start-Job child process, so detect support inline rather than inheriting it.
+$CxsIrmArgs = @{}
+if ((Get-Command Invoke-RestMethod).Parameters.ContainsKey('UseBasicParsing')) {
+    $CxsIrmArgs['UseBasicParsing'] = $true
+}
+
+$resp = Invoke-RestMethod @CxsIrmArgs -Uri $claimUrl -Method POST -Body $body -Headers $headers -TimeoutSec 30
 
 $newKey = $resp.apiKey
 if (-not $newKey) {
