@@ -332,26 +332,46 @@ catch {
     Write-Host "  [FAIL] SQL Server: $_" -ForegroundColor Red
 }
 
-# Check for tables (both LS Central and NAV format)
+# Verify the ACTUAL transaction tables this store will query exist AND expose the
+# [Date] column the daily sync filters on. We probe each real object name (built
+# from -Company / -ExtGuid exactly like the collector's Get-TableFullName) with
+# `SELECT TOP (1) [Date] FROM <table>`. That resolves BOTH the object name
+# (Invalid object name => wrong -Company / -ExtGuid) and the [Date] column
+# (Invalid column name => non-standard schema) - the two failure modes - WITHOUT
+# scanning: a `WHERE [Date] = <day>` count would scan a large entry table and could
+# blow past the timeout, false-failing a perfectly healthy store on this hard gate.
+# So a real misconfig fails LOUDLY at install instead of going silently dark at 2am.
+#   (2026-06 ACCAMF/ACCBBR: the contis brand-default Company=NOC built `NOC$...`
+#    names that don't exist in the ACC franchise DBs. The old INFORMATION_SCHEMA LIKE
+#    check passed because *some* "Transaction Header" existed, so the misconfig shipped
+#    unnoticed and the nightly sync failed silently with zero data sent.)
+$tableErrors   = @()
+$logicalTables = @("Transaction Header", "Trans_ Sales Entry", "Trans_ Payment Entry")
 try {
     $testConn2 = New-Object System.Data.SqlClient.SqlConnection(
         "Server=$SqlServer;Database=$Database;Integrated Security=True;TrustServerCertificate=True;Connection Timeout=10;"
     )
     $testConn2.Open()
-    $cmd = $testConn2.CreateCommand()
-    $cmd.CommandText = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME LIKE '%Transaction Header%'"
-    $tableCount = $cmd.ExecuteScalar()
+    foreach ($t in $logicalTables) {
+        # Mirror collector Get-TableFullName: empty ExtGuid => NAV [Company$Table];
+        # otherwise LS Central [Company$LSC Table$ExtGuid].
+        if ([string]::IsNullOrWhiteSpace($ExtGuid)) { $full = "[$Company`$$t]" }
+        else { $full = "[$Company`$LSC $t`$$ExtGuid]" }
+        try {
+            $cmd = $testConn2.CreateCommand()
+            $cmd.CommandText = "SELECT TOP (1) [Date] FROM $full"
+            $cmd.CommandTimeout = 30
+            [void]$cmd.ExecuteScalar()
+            Write-Host "  [OK] Verified $full (object + [Date] column resolve)" -ForegroundColor Green
+        }
+        catch {
+            $tableErrors += "$full  ->  $($_.Exception.Message)"
+        }
+    }
     $testConn2.Close()
-    if ($tableCount -gt 0) {
-        Write-Host "  [OK] Found $tableCount transaction table(s)" -ForegroundColor Green
-    }
-    else {
-        Write-Host "  [WARN] No transaction tables found - check database name" -ForegroundColor Yellow
-    }
 }
 catch {
-    # Don't swallow silently - surface the table check failure (was an empty catch).
-    Write-Host "  [WARN] Could not verify transaction tables: $($_.Exception.Message)" -ForegroundColor Yellow
+    $tableErrors += "SQL connection for table verification failed: $($_.Exception.Message)"
 }
 
 # Send checkin
@@ -368,6 +388,21 @@ try {
 catch {
     Write-Host "  [WARN] Could not send checkin: $_" -ForegroundColor Yellow
     Write-Host "         The agent will still be installed - check network if this persists" -ForegroundColor Yellow
+}
+
+# Abort BEFORE scheduling if the store's real tables couldn't be verified - a store
+# that can't query its own POS tables must not be left with a nightly task that fails
+# silently (the ACCAMF/ACCBBR dark-sync class). The install checkin above already
+# recorded the attempt; fix -Company / -ExtGuid and re-run.
+if ($tableErrors.Count -gt 0) {
+    Write-Host ""
+    Write-Host "  [FAIL] Could not verify this store's transaction tables - install aborted:" -ForegroundColor Red
+    foreach ($e in $tableErrors) { Write-Host "         $e" -ForegroundColor Red }
+    Write-Host ""
+    Write-Host "  The daily sync would fail silently with -Company '$Company' / -ExtGuid '$ExtGuid'." -ForegroundColor Yellow
+    Write-Host "  Find the store's real table prefix, then re-run with the correct -Company (and -ExtGuid):" -ForegroundColor Yellow
+    Write-Host "      SELECT name FROM sys.tables WHERE name LIKE '%Transaction Header%';" -ForegroundColor Yellow
+    exit 1
 }
 
 # 4. Register scheduled task
