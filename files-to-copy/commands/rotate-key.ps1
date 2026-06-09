@@ -35,7 +35,7 @@ $headers = @{
     "Authorization" = "Bearer $($Config.ApiKey)"
 }
 
-$resp = Invoke-RestMethod -Uri $claimUrl -Method POST -Body $body -Headers $headers -TimeoutSec 30
+$resp = Invoke-RestMethod -UseBasicParsing -Uri $claimUrl -Method POST -Body $body -Headers $headers -TimeoutSec 30
 
 $newKey = $resp.apiKey
 if (-not $newKey) {

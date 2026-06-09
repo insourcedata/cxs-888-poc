@@ -115,7 +115,6 @@ cd C:\Temp\store-agent
   .\install-cxs-collector.ps1 -Brand "contis" -ApiUrl "https://888.insourcedata.org/api/collect" -ApiKey "e208da46d44dcd96f4ff1732f85ed306" -SqlServer "BBRSERVER1" -Database "ACCBBRDB" -StoreCode "ACCBBR"
 ```
 
-
 ```
   # 1. Check if the scheduled task exists and is enabled
   Get-ScheduledTask -TaskName "CXS Agent Heartbeat - <STORE_CODE>" | Format-List TaskName, Enabled, State

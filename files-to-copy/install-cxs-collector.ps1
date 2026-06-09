@@ -127,6 +127,16 @@ param(
     [switch]$AllowSelfSignedCert
 )
 
+# --- PowerShell version pre-flight (supports 4.0+; fail loudly, never silently dark) ---
+$psv = $PSVersionTable.PSVersion
+if ([version]("{0}.{1}" -f $psv.Major, $psv.Minor) -lt [version]"4.0") {
+    Write-Host "ERROR: PowerShell $psv detected. This installer requires PowerShell 4.0 or later (install WMF 4.0+ and re-run)." -ForegroundColor Red
+    exit 1
+}
+if ($psv.Major -lt 5) {
+    Write-Host "[NOTE] Running on PowerShell $psv (4.x). Supported; 5.1 is recommended. Confirm a heartbeat appears after install." -ForegroundColor Yellow
+}
+
 # --- Brand-driven defaults -------------------------------------------------------
 # Each brand has its conventional Company and ExtGuid. The user can override either
 # by passing -Company / -ExtGuid explicitly; otherwise they pick up these defaults.
@@ -344,7 +354,7 @@ try {
         "Content-Type"  = "application/json"
         "Authorization" = "Bearer $ApiKey"
     }
-    $response = Invoke-RestMethod -Uri $checkinUrl -Method POST -Body $json -Headers $headers -TimeoutSec 15
+    $response = Invoke-RestMethod -UseBasicParsing -Uri $checkinUrl -Method POST -Body $json -Headers $headers -TimeoutSec 15
     Write-Host "  [OK] Install checkin sent to collector" -ForegroundColor Green
 }
 catch {
