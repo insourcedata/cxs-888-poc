@@ -42,7 +42,12 @@
 
 .PARAMETER Company
     The LS Central company name as it appears in the SQL table prefix
-    (e.g. "WENDYS PH", "CONTIS"). Defaults to "WENDYS PH".
+    (e.g. "WENDYS PH", "NOC"). USUALLY OMIT THIS - the installer auto-discovers
+    the real prefix (and NAV vs LS Central format) by probing the store's own
+    database (sys.tables), then verifies it before scheduling. Pass it explicitly
+    only to override discovery (e.g. a database that hosts multiple companies, where
+    the installer can't auto-pick and will list the choices). If omitted and
+    discovery finds nothing, it falls back to the brand default.
 
 .PARAMETER ExtGuid
     The LS Central table extension GUID for this installation. Defaults to
@@ -195,6 +200,55 @@ function Ensure-CollectorRootTrusted {
     }
 }
 
+function Resolve-LsTablePrefix {
+    # Auto-discovers the LS Central company prefix (and table-naming format) by
+    # inspecting the store's OWN database, so IT no longer has to hand-pass the right
+    # -Company. The prefix differs by franchise - NOC stores use "NOC"; the ACC
+    # franchise (ACCAMF/ACCBBR/ACCVLS/ACCAMM) uses its own company - and a wrong
+    # default silently produced [NOC$Transaction Header] queries against ACC DBs that
+    # failed every night with zero data sent (the dark-sync class).
+    #
+    # Probes sys.tables for the "Transaction Header" object in BOTH conventions:
+    #   NAV / legacy:  [<Company>$Transaction Header]
+    #   LS Central:    [<Company>$LSC Transaction Header$<ExtGuid>]
+    # Returns a de-duplicated array of @{ Company; ExtGuid; Format; Table }.
+    param(
+        [Parameter(Mandatory)][string]$SqlServer,
+        [Parameter(Mandatory)][string]$Database
+    )
+    $names = @()
+    $conn = New-Object System.Data.SqlClient.SqlConnection(
+        "Server=$SqlServer;Database=$Database;Integrated Security=True;TrustServerCertificate=True;Connection Timeout=10;")
+    $conn.Open()
+    try {
+        $cmd = $conn.CreateCommand()
+        # '$' is a literal in T-SQL LIKE; the single-quoted PS string keeps it literal too.
+        $cmd.CommandText = 'SELECT name FROM sys.tables WHERE name LIKE ''%$Transaction Header'' OR name LIKE ''%$LSC Transaction Header$%'''
+        $cmd.CommandTimeout = 30
+        $reader = $cmd.ExecuteReader()
+        while ($reader.Read()) { $names += [string]$reader['name'] }
+        $reader.Close()
+    } finally {
+        $conn.Close()
+    }
+
+    $seen = @{}
+    $results = @()
+    foreach ($name in $names) {
+        $entry = $null
+        if ($name -match '^(.+)\$LSC Transaction Header\$(.+)$') {
+            $entry = @{ Company = $Matches[1]; ExtGuid = $Matches[2]; Format = 'LS Central'; Table = $name }
+        } elseif ($name -match '^(.+)\$Transaction Header$') {
+            $entry = @{ Company = $Matches[1]; ExtGuid = ''; Format = 'NAV'; Table = $name }
+        }
+        if ($entry) {
+            $key = "$($entry.Company)|$($entry.ExtGuid)"
+            if (-not $seen.ContainsKey($key)) { $seen[$key] = $true; $results += $entry }
+        }
+    }
+    return ,$results
+}
+
 Write-Host ""
 Write-Host "=== CXS Collector Installer ===" -ForegroundColor Cyan
 Write-Host ""
@@ -209,6 +263,53 @@ New-Item -ItemType Directory -Path "$InstallDir\config" -Force | Out-Null
 
 # 2. Copy collector script and set configuration
 Write-Host "[2/4] Installing collector script..."
+
+# --- Auto-discover the LS Central company prefix from the store database ----------
+# Explicit -Company / -ExtGuid always win; discovery only fills/corrects the brand
+# default so a wrong default (e.g. "NOC" against an ACC-franchise DB) can't ship and
+# dark-sync. Resolves BEFORE the script + config below are written so the corrected
+# values propagate everywhere.
+$companyExplicit = $PSBoundParameters.ContainsKey('Company')
+$extGuidExplicit = $PSBoundParameters.ContainsKey('ExtGuid')
+Write-Host "  Identifying LS Central company prefix from $Database ..."
+try {
+    $prefixes = @(Resolve-LsTablePrefix -SqlServer $SqlServer -Database $Database)
+
+    if ($companyExplicit) {
+        $hit = @($prefixes | Where-Object { $_.Company -eq $Company })
+        if ($prefixes.Count -gt 0 -and $hit.Count -eq 0) {
+            Write-Host "  [WARN] -Company '$Company' was passed, but $Database exposes: $(@($prefixes | ForEach-Object { $_.Company }) -join ', '). Using your value; the table check below is the final gate." -ForegroundColor Yellow
+        } else {
+            Write-Host "  [OK] Using operator-supplied -Company '$Company'." -ForegroundColor Green
+        }
+    }
+    elseif ($prefixes.Count -eq 1) {
+        $p = $prefixes[0]
+        if ($p.Company -ne $Company) {
+            Write-Host "  [AUTO] Detected company '$($p.Company)' ($($p.Format) format) in $Database - overriding brand default '$Company'." -ForegroundColor Cyan
+        } else {
+            Write-Host "  [OK] Confirmed company '$($p.Company)' ($($p.Format) format) in $Database." -ForegroundColor Green
+        }
+        $Company = $p.Company
+        if (-not $extGuidExplicit) { $ExtGuid = $p.ExtGuid }
+    }
+    elseif ($prefixes.Count -gt 1) {
+        Write-Host ""
+        Write-Host "  [FAIL] $Database contains multiple company prefixes - cannot auto-pick. Re-run with one of:" -ForegroundColor Red
+        foreach ($p in $prefixes) {
+            $egArg = if ($p.ExtGuid) { " -ExtGuid `"$($p.ExtGuid)`"" } else { " -ExtGuid `"`"" }
+            Write-Host "         -Company `"$($p.Company)`"$egArg   (table: [$($p.Table)])" -ForegroundColor Yellow
+        }
+        exit 1
+    }
+    else {
+        Write-Host "  [WARN] No 'Transaction Header' table found in $Database via auto-discovery. Falling back to -Company '$Company'; the table check below will abort if it's wrong." -ForegroundColor Yellow
+    }
+}
+catch {
+    Write-Host "  [WARN] Company auto-discovery skipped (SQL not reachable yet: $($_.Exception.Message)). Using -Company '$Company'; the table check below still applies." -ForegroundColor Yellow
+}
+
 $sourceScript = Join-Path $PSScriptRoot "cxs-collector.ps1"
 if (-not (Test-Path $sourceScript)) {
     Write-Host "  ERROR: cxs-collector.ps1 not found in $PSScriptRoot" -ForegroundColor Red
