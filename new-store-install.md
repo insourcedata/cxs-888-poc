@@ -83,8 +83,8 @@ C:\Temp\store-agent\install-cxs-collector.ps1 `
     -OracleCode "4058"
 ```
 
-**Conti's:** use `-Brand "contis"` and drop `-OracleCode` (Conti's defaults to
-Company `NOC`, NAV-format tables, and a 02:00 sync time):
+**Conti's:** use `-Brand "contis"` and drop `-OracleCode` (Conti's uses
+NAV-format tables and a 02:00 sync time):
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 
@@ -99,10 +99,22 @@ C:\Temp\store-agent\install-cxs-collector.ps1 `
 
 It should end with `=== Installation Complete ===` and no `[FAIL]` lines.
 
+> **You no longer pass `-Company`.** The installer auto-discovers the LS Central
+> company prefix straight from the store's own database (it probes `sys.tables`
+> for the `Transaction Header` object) and prints e.g.
+> `[AUTO] Detected company 'XXX' (NAV format) in <DB>`. This handles the fact that
+> the franchises differ - NOC stores resolve to `NOC`, the **ACC franchise**
+> (ACCAMF/ACCBBR/ACCVLS/ACCAMM) to its own company - so a wrong default can no
+> longer ship a silently-failing "dark sync". It then verifies the real tables
+> resolve before scheduling, aborting with a clear message if they don't.
+
 Optional flags:
 - `-SqlServer "localhost"` if SQL Server runs on this same box (you can also just
   omit `-SqlServer` for the Wendy's default).
 - `-SyncTime "3:30AM"` to override the default sync time (Wendy's 05:00, Conti's 02:00).
+- `-Company "<prefix>"` / `-ExtGuid "<guid>"` **only to override auto-discovery** -
+  needed when one database hosts multiple companies (the installer lists the
+  choices and aborts so you can pick) or when discovery can't reach SQL.
 - `-AllowSelfSignedCert` only if Step 2 showed a certificate `PartialChain` error.
 
 ## Step 4 - Let SYSTEM into SQL Server (one-time, important)

@@ -386,7 +386,7 @@ powershell -ExecutionPolicy Bypass -File "C:\CXS\install-cxs-collector.ps1" `
 
 ### 13b. Conti's Store
 
-Conti's NOC database uses the older NAV-format table names (`[NOC$Transaction Header]`) instead of the LS Central extension format Wendy's uses (`[<Company>$LSC <Table>$<GUID>]`). Just pass `-Brand "contis"` — the installer fills in NOC-conventional `Company = "NOC"` and empty `ExtGuid` (which is what triggers NAV-format table names) automatically.
+Conti's databases use the older NAV-format table names (`[<Company>$Transaction Header]`) instead of the LS Central extension format Wendy's uses (`[<Company>$LSC <Table>$<GUID>]`). Just pass `-Brand "contis"` — the installer **auto-discovers the company prefix from the store's own database** and uses NAV format (empty `ExtGuid`).
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File "C:\CXS\install-cxs-collector.ps1" `
@@ -398,9 +398,21 @@ powershell -ExecutionPolicy Bypass -File "C:\CXS\install-cxs-collector.ps1" `
     -Brand      "contis"
 ```
 
-> **Override the defaults only when needed.** If the Conti's instance has a non-`NOC` company prefix or uses LS Central extension tables instead of NAV, pass `-Company "<their-prefix>"` and/or `-ExtGuid "<their-guid>"` explicitly. The brand-driven defaults are `Company = "NOC"` and `ExtGuid = ""` for `contis`.
+> **The company prefix is now auto-detected — don't hand-pass `-Company`.** During
+> `[2/4]` the installer probes `sys.tables` for the `Transaction Header` object and
+> prints e.g. `[AUTO] Detected company 'NOC' (NAV format) in NOCSSTDB`. This matters
+> because the prefix differs by franchise: NOC stores resolve to `NOC`, but the
+> **ACC franchise** (ACCAMF/ACCBBR/ACCVLS/ACCAMM) uses a *different* company — the
+> old `Company = "NOC"` default queried `[NOC$Transaction Header]`, which doesn't
+> exist in the ACC databases, so their nightly sync failed silently (zero rows). The
+> installer then verifies the discovered tables resolve before scheduling.
 >
-> **Finding the right values.** Open SSMS, switch to the LS Central database, expand `Tables`, look at any name like `<Prefix>$Transaction Header` (NAV format) or `<Prefix>$LSC Transaction Header$<GUID>` (LS Central format). The prefix is `Company`; the GUID (if present) is `ExtGuid`.
+> **Override only when needed.** Pass `-Company "<prefix>"` / `-ExtGuid "<guid>"`
+> explicitly when one database hosts multiple companies (the installer can't
+> auto-pick — it lists the candidates and aborts so you choose) or when SQL isn't
+> reachable at install time. To find them by hand: in SSMS expand `Tables` and read
+> any `<Prefix>$Transaction Header` (NAV) or `<Prefix>$LSC Transaction Header$<GUID>`
+> (LS Central) — the prefix is `Company`, the GUID (if any) is `ExtGuid`.
 
 ### Custom sync time (either brand)
 
