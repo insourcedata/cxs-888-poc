@@ -259,6 +259,30 @@ anymore.
 | Sync runs but 0 rows | Wrong database or table names | Re-check Brand / Database; for Conti's confirm Company/ExtGuid |
 | `Unauthorized` (401) | Wrong API key | Confirm the key from Arshath |
 | Store not on Agent Fleet | Heartbeat task not running, or SYSTEM can't reach the API | `Get-ScheduledTask "CXS Agent Heartbeat - <StoreCode>"` -> `Start-ScheduledTask`; read `C:\CXS\logs\agent-<StoreCode>.log` for the real error |
+| `[WARN] Heartbeat ExecutionTimeLimit = 'PT72H'` at install | Task Scheduler kept its default 3-day limit (the zero TimeSpan didn't persist on this box); the agent gets force-stopped after ~72h uptime and stays dark until reboot | Installer now auto-repairs it via XML re-register. If it still warns, apply the manual fix below |
+
+### Heartbeat 72-hour force-stop (ExecutionTimeLimit)
+
+The heartbeat agent runs forever, so its task must have **no execution time limit**
+(`PT0S`). On some boxes Task Scheduler keeps its default `PT72H` (3 days) and
+force-stops the agent — the store goes dark until the next reboot. The installer
+detects this and self-heals; if you ever need to fix it by hand, set `$tn` to the
+store's heartbeat task and run:
+
+```powershell
+$tn  = "CXS Agent Heartbeat - <StoreCode>"
+$xml = Export-ScheduledTask -TaskName $tn
+$xml = $xml -replace '<ExecutionTimeLimit>[^<]*</ExecutionTimeLimit>','<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>'
+Register-ScheduledTask -TaskName $tn -Xml $xml -User "NT AUTHORITY\SYSTEM" -Force | Out-Null
+
+(Get-ScheduledTask -TaskName $tn).Settings.ExecutionTimeLimit   # must print PT0S
+
+Stop-ScheduledTask  -TaskName $tn      # restart so the running instance picks it up
+Start-ScheduledTask -TaskName $tn
+```
+
+**GUI alternative:** Task Scheduler -> `CXS Agent Heartbeat - <StoreCode>` ->
+Properties -> **Settings** tab -> uncheck **"Stop the task if it runs longer than"** -> OK.
 
 ## Notes
 - Copy files to `C:\Temp\store-agent`, never into `C:\CXS`.
