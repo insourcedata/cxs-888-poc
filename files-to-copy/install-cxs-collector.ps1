@@ -622,7 +622,31 @@ try {
     if ([string]::IsNullOrEmpty($hbEtl) -or $hbEtl -eq "PT0S") {
         Write-Host "  [OK] Heartbeat ExecutionTimeLimit = '$hbEtl' (no 3-day force-stop)." -ForegroundColor Green
     } else {
-        Write-Host "  [WARN] Heartbeat ExecutionTimeLimit = '$hbEtl' (expected PT0S/none) - Task Scheduler may force-stop the agent after that limit, taking the store dark. Verify: Export-ScheduledTask -TaskName '$HeartbeatTaskName'" -ForegroundColor Red
+        # Self-heal: New-ScheduledTaskSettingsSet's zero TimeSpan didn't persist (the
+        # Server 2012 / PS 4.0 CIM-path quirk). Set-ScheduledTask uses the same CIM
+        # path and tends to drop it again, so re-register from the task's own XML with
+        # a literal <ExecutionTimeLimit>PT0S</ExecutionTimeLimit> - that reliably sticks.
+        Write-Host "  [WARN] Heartbeat ExecutionTimeLimit = '$hbEtl' (expected PT0S/none) - the zero TimeSpan didn't persist. Re-applying 'run indefinitely' via task XML..." -ForegroundColor Yellow
+        try {
+            $hbXml = Export-ScheduledTask -TaskName $HeartbeatTaskName
+            if ($hbXml -match '<ExecutionTimeLimit>[^<]*</ExecutionTimeLimit>') {
+                $hbXml = $hbXml -replace '<ExecutionTimeLimit>[^<]*</ExecutionTimeLimit>', '<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>'
+            } else {
+                # Element absent entirely - inject it as the first child of <Settings>.
+                $hbXml = $hbXml -replace '(<Settings[^>]*>)', "`$1`r`n    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>"
+            }
+            Register-ScheduledTask -TaskName $HeartbeatTaskName -Xml $hbXml -User "NT AUTHORITY\SYSTEM" -Force | Out-Null
+            Start-ScheduledTask -TaskName $HeartbeatTaskName
+            $hbEtl2 = (Get-ScheduledTask -TaskName $HeartbeatTaskName).Settings.ExecutionTimeLimit
+            if ([string]::IsNullOrEmpty($hbEtl2) -or $hbEtl2 -eq "PT0S") {
+                Write-Host "  [OK] Heartbeat ExecutionTimeLimit now '$hbEtl2' - 3-day force-stop removed (XML re-register)." -ForegroundColor Green
+            } else {
+                Write-Host "  [WARN] ExecutionTimeLimit still '$hbEtl2' after XML re-apply. Fix manually: Task Scheduler -> '$HeartbeatTaskName' -> Settings -> uncheck 'Stop the task if it runs longer than'." -ForegroundColor Red
+            }
+        } catch {
+            Write-Host "  [WARN] Auto-repair of ExecutionTimeLimit failed: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "         Fix manually: Task Scheduler -> '$HeartbeatTaskName' -> Settings -> uncheck 'Stop the task if it runs longer than' (sets PT0S)." -ForegroundColor Yellow
+        }
     }
 } catch {
     Write-Host "  [WARN] Could not read back heartbeat ExecutionTimeLimit: $($_.Exception.Message)" -ForegroundColor Yellow
