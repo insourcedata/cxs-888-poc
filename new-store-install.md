@@ -114,8 +114,78 @@ Optional flags:
 - `-SyncTime "3:30AM"` to override the default sync time (Wendy's 05:00, Conti's 02:00).
 - `-Company "<prefix>"` / `-ExtGuid "<guid>"` **only to override auto-discovery** -
   needed when one database hosts multiple companies (the installer lists the
-  choices and aborts so you can pick) or when discovery can't reach SQL.
+  choices and aborts so you can pick) or when discovery can't reach SQL. See
+  [Finding `-Company` and `-ExtGuid` manually](#finding--company-and--extguid-manually) below.
 - `-AllowSelfSignedCert` only if Step 2 showed a certificate `PartialChain` error.
+
+### Finding `-Company` and `-ExtGuid` manually
+
+You only need this when the installer **aborts** instead of auto-detecting - either
+`[FAIL] ... multiple company prefixes` (the database holds more than one company,
+e.g. a live `WENDYS PH` plus a leftover `WENDYS_UAT...`) or `[FAIL] Could not verify
+this store's transaction tables`. The values live in the store's own database; pick
+them, then re-run the install command with `-Company`/`-ExtGuid` added.
+
+**Anatomy of a table name** - read the two values straight off it:
+
+```
+WENDYS PH$LSC Transaction Header$5ecfc871-5d82-43f1-9c54-59685e82318d
+└── Company ──┘     └ table ┘    └──────────── ExtGuid ─────────────┘
+```
+
+- `-Company` = everything **before** `$LSC` (or before the first `$` for Conti's NAV
+  tables, which have no `LSC`/GUID - e.g. `NOC$Transaction Header` -> `-Company "NOC"`).
+- `-ExtGuid` = the GUID **after** `Transaction Header$` (Conti's NAV = `-ExtGuid ""`).
+
+**Ignore these decoys** - they also contain "Transaction Header" but are not the data table:
+- `...$LSC Arch Transaction Header$...` - the archive table.
+- `...$LSC Transaction Header$<guid>$ext` - a Business Central extension companion (has
+  the `$ext` suffix; holds only extra fields, no sales rows).
+- a UAT/test company (e.g. `WENDYS_UAT01312022`) - use the **production** company.
+
+#### Option A - SSMS (recommended)
+
+Open a New Query window **on the store's database** and run this. It lists every
+matching table with its row count (no table scan), so the live one is obvious:
+
+```sql
+USE <Database>;   -- e.g. WSMAXDB1
+SELECT t.name AS table_name, SUM(p.rows) AS row_count
+FROM sys.tables t
+JOIN sys.partitions p ON p.object_id = t.object_id AND p.index_id IN (0,1)
+WHERE t.name LIKE '%Transaction Header%'
+GROUP BY t.name
+ORDER BY row_count DESC;
+```
+
+The right table is the one with the **highest row count** that starts with
+`<Company>$LSC Transaction Header$<guid>` (not `Arch`, not `$ext`, not the UAT company).
+
+#### Option B - PowerShell (no SSMS on the box)
+
+Paste each line separately (keep the connection string on one line):
+
+```powershell
+$c = New-Object System.Data.SqlClient.SqlConnection("Server=<SqlServer>;Database=<Database>;Trusted_Connection=True;TrustServerCertificate=True;")
+$c.Open()
+$cmd = $c.CreateCommand()
+$cmd.CommandText = "SELECT t.name, SUM(p.rows) rows FROM sys.tables t JOIN sys.partitions p ON p.object_id=t.object_id AND p.index_id IN (0,1) WHERE t.name LIKE '%Transaction Header%' GROUP BY t.name ORDER BY rows DESC"
+$r = $cmd.ExecuteReader()
+while ($r.Read()) { "{0}  rows={1}" -f $r['name'], $r['rows'] }
+$c.Close()
+```
+
+#### Then re-run the install
+
+Add the two values to the Step 3 command, e.g.:
+
+```powershell
+... -StoreCode "S014" -OracleCode "4007" `
+    -Company "WENDYS PH" -ExtGuid "5ecfc871-5d82-43f1-9c54-59685e82318d"
+```
+
+Passing them explicitly **skips auto-discovery entirely**; the installer verifies that
+exact table resolves, then schedules the tasks.
 
 ## Step 4 - Let SYSTEM into SQL Server (one-time, important)
 
@@ -256,6 +326,7 @@ anymore.
 | `ERROR querying headers` | SQL Server not reachable | Check the SQL service, instance name, and database |
 | `ERROR posting data` / timeout | Can't reach the API | Re-run the Step 2 network checks |
 | `no rows — skipping POST` | That day had no transactions | Try a date you know has sales |
+| Install aborts: `multiple company prefixes` / `Could not verify ... transaction tables` | DB hosts >1 company (live + UAT), or discovery couldn't match the table | [Find `-Company`/`-ExtGuid` manually](#finding--company-and--extguid-manually) and re-run with them |
 | Sync runs but 0 rows | Wrong database or table names | Re-check Brand / Database; for Conti's confirm Company/ExtGuid |
 | `Unauthorized` (401) | Wrong API key | Confirm the key from Arshath |
 | Store not on Agent Fleet | Heartbeat task not running, or SYSTEM can't reach the API | `Get-ScheduledTask "CXS Agent Heartbeat - <StoreCode>"` -> `Start-ScheduledTask`; read `C:\CXS\logs\agent-<StoreCode>.log` for the real error |
