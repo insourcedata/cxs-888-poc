@@ -232,11 +232,18 @@ function Resolve-LsTablePrefix {
         $conn.Close()
     }
 
+    # The ExtGuid must be a BARE GUID. LS Central databases also expose companion
+    # tables for the same object - an archive ([..$LSC Arch Transaction Header$..],
+    # already filtered out by the LIKE) and a table-extension companion that appends
+    # a suffix ([..$LSC Transaction Header$<guid>$ext]). Anchoring the GUID to end of
+    # string ($) rejects the "$ext" companion so it can't masquerade as a second,
+    # bogus prefix (which previously turned WENDYS PH into "WENDYS PH WENDYS PH").
+    $guidPat = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
     $seen = @{}
     $results = @()
     foreach ($name in $names) {
         $entry = $null
-        if ($name -match '^(.+)\$LSC Transaction Header\$(.+)$') {
+        if ($name -match "^(.+)\`$LSC Transaction Header\`$($guidPat)`$") {
             $entry = @{ Company = $Matches[1]; ExtGuid = $Matches[2]; Format = 'LS Central'; Table = $name }
         } elseif ($name -match '^(.+)\$Transaction Header$') {
             $entry = @{ Company = $Matches[1]; ExtGuid = ''; Format = 'NAV'; Table = $name }
