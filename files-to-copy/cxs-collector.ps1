@@ -404,7 +404,7 @@ function Invoke-DaySync {
             $reader = $cmd.ExecuteReader()
 
             $fieldCount = $reader.FieldCount
-            $colNames = [string[]]::new($fieldCount)
+            $colNames = New-Object 'string[]' $fieldCount   # PS 4.0-safe (no ::new())
             for ($i = 0; $i -lt $fieldCount; $i++) { $colNames[$i] = $reader.GetName($i) }
 
             $rows = @()
@@ -421,22 +421,31 @@ function Invoke-DaySync {
                         $val = $reader.GetValue($i)
                     }
                     catch {
-                        # SQL Server holds a value .NET can't materialise (a numeric
-                        # that overflows System.Decimal). Read the raw provider value
-                        # (SqlDecimal holds 38 digits, never overflows) and coerce to
-                        # a double so the row/day still syncs; the collector applies
-                        # plausibility checks on its side.
-                        $raw = $null
-                        try { $raw = $reader.GetProviderSpecificValue($i).ToString() } catch {}
-                        $parsed = 0.0
-                        if ($raw -and [double]::TryParse($raw, [Globalization.NumberStyles]::Any, [Globalization.CultureInfo]::InvariantCulture, [ref]$parsed)) {
-                            $val = $parsed
-                            Write-Log "  [$Day] WARN $($table.Alias).[$name] out-of-range value coerced (raw='$raw'): $_"
+                        # SQL Server holds a value .NET can't materialise here - a
+                        # numeric that overflows System.Decimal. (NAV stores Decimal as
+                        # numeric(38,20); at scale 20 an amount like ~986,705,576 has a
+                        # coefficient of ~9.9e28, past .NET's ~7.9e28 ceiling.)
+                        #
+                        # Do NOT fabricate a substitute value - a coerced number would
+                        # flow downstream and, once clamped, look like a real ~100M
+                        # tender. Instead null just this cell so the row and day still
+                        # sync, and record it as a structured skip reason. That rides
+                        # the last-sync summary -> checkin channel (unlike a log line,
+                        # which scrolls off the 5-line tail), so operators can see it
+                        # and trace the offending row. A null-amount payment line is
+                        # dropped by the collector rather than stored as bogus data.
+                        $rawTxt = $null
+                        try { $rawTxt = $reader.GetProviderSpecificValue($i).ToString() } catch {}
+                        $val = $null
+
+                        if (-not $skipReasons["bad_value"]) {
+                            $skipReasons["bad_value"] = @{ reason = "bad_value"; count = 0; sampleRows = @() }
                         }
-                        else {
-                            $val = $null
-                            Write-Log "  [$Day] WARN $($table.Alias).[$name] unreadable - nulled: $_"
+                        $skipReasons["bad_value"].count++
+                        if ($skipReasons["bad_value"].sampleRows.Count -lt 5) {
+                            $skipReasons["bad_value"].sampleRows += @{ table = $table.Alias; column = $name; raw = $rawTxt }
                         }
+                        Write-Log "  [$Day] WARN unreadable value nulled: $($table.Alias).[$name] raw='$rawTxt' ($_)"
                     }
 
                     if ($val -is [DBNull]) {
