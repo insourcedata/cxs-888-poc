@@ -380,6 +380,8 @@ function Invoke-DaySync {
         $fullName = Get-TableFullName -TableName $table.Name
         $query = "SELECT * FROM $fullName WHERE [Date] = '$Day'"
 
+        $conn = $null
+        $reader = $null
         try {
             $conn = New-Object System.Data.SqlClient.SqlConnection($connString)
             $conn.Open()
@@ -388,30 +390,67 @@ function Invoke-DaySync {
             $cmd.CommandText = $query
             $cmd.CommandTimeout = 300  # 5 minutes
 
-            $adapter = New-Object System.Data.SqlClient.SqlDataAdapter($cmd)
-            $dataTable = New-Object System.Data.DataTable
-            [void]$adapter.Fill($dataTable)
+            # Read row-by-row with a SqlDataReader rather than SqlDataAdapter.Fill().
+            # Fill() materialises the whole result eagerly and throws on the FIRST
+            # value it can't convert, which aborts the entire day (and, in backfill,
+            # every day queued behind it). A reader lets us handle a bad cell in
+            # isolation and keep the rest of the rows/days flowing.
+            #
+            # Root cause this guards against: NAV/LS stores every Decimal as SQL
+            # numeric(38,20). A corrupt/out-of-range amount - e.g. S133 on
+            # 2026-06-12 had a payment "Amount Tendered" of ~986,705,576 - exceeds
+            # what .NET System.Decimal can hold (~7.9e28) and made Fill() throw
+            # "Conversion overflows.", losing the whole day on every retry.
+            $reader = $cmd.ExecuteReader()
 
-            $conn.Close()
+            $fieldCount = $reader.FieldCount
+            $colNames = [string[]]::new($fieldCount)
+            for ($i = 0; $i -lt $fieldCount; $i++) { $colNames[$i] = $reader.GetName($i) }
 
-            # Convert DataTable rows to array of hashtables
             $rows = @()
-            foreach ($row in $dataTable.Rows) {
+            while ($reader.Read()) {
                 $rowHash = @{}
-                foreach ($col in $dataTable.Columns) {
-                    $val = $row[$col.ColumnName]
+                for ($i = 0; $i -lt $fieldCount; $i++) {
+                    $name = $colNames[$i]
+
+                    if ($reader.IsDBNull($i)) { $rowHash[$name] = $null; continue }
+
+                    $val = $null
+                    try {
+                        # Normal path - same CLR value the DataTable read produced.
+                        $val = $reader.GetValue($i)
+                    }
+                    catch {
+                        # SQL Server holds a value .NET can't materialise (a numeric
+                        # that overflows System.Decimal). Read the raw provider value
+                        # (SqlDecimal holds 38 digits, never overflows) and coerce to
+                        # a double so the row/day still syncs; the collector applies
+                        # plausibility checks on its side.
+                        $raw = $null
+                        try { $raw = $reader.GetProviderSpecificValue($i).ToString() } catch {}
+                        $parsed = 0.0
+                        if ($raw -and [double]::TryParse($raw, [Globalization.NumberStyles]::Any, [Globalization.CultureInfo]::InvariantCulture, [ref]$parsed)) {
+                            $val = $parsed
+                            Write-Log "  [$Day] WARN $($table.Alias).[$name] out-of-range value coerced (raw='$raw'): $_"
+                        }
+                        else {
+                            $val = $null
+                            Write-Log "  [$Day] WARN $($table.Alias).[$name] unreadable - nulled: $_"
+                        }
+                    }
+
                     if ($val -is [DBNull]) {
-                        $rowHash[$col.ColumnName] = $null
+                        $rowHash[$name] = $null
                     }
                     elseif ($val -is [DateTime]) {
-                        $rowHash[$col.ColumnName] = $val.ToString("yyyy-MM-dd HH:mm:ss")
+                        $rowHash[$name] = $val.ToString("yyyy-MM-dd HH:mm:ss")
                     }
                     elseif ($val -is [byte[]]) {
                         # Skip binary columns (e.g. rowversion/timestamp)
-                        $rowHash[$col.ColumnName] = $null
+                        $rowHash[$name] = $null
                     }
                     else {
-                        $rowHash[$col.ColumnName] = $val
+                        $rowHash[$name] = $val
                     }
                 }
                 $rows += $rowHash
@@ -423,6 +462,12 @@ function Invoke-DaySync {
         catch {
             Write-Log "  [$Day] ERROR querying $($table.Alias): $_"
             return $false
+        }
+        finally {
+            # Always release the reader/connection, even on the error path above
+            # (the old code leaked the connection when Fill threw).
+            if ($reader) { $reader.Dispose() }
+            if ($conn)   { $conn.Dispose() }
         }
     }
 
