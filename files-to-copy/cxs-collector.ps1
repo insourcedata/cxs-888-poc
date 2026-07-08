@@ -434,6 +434,7 @@ function Invoke-DaySync {
                         # which scrolls off the 5-line tail), so operators can see it
                         # and trace the offending row. A null-amount payment line is
                         # dropped by the collector rather than stored as bogus data.
+                        $errMsg = "$_"   # capture before the nested try/catch overwrites $_
                         $rawTxt = $null
                         try { $rawTxt = $reader.GetProviderSpecificValue($i).ToString() } catch {}
                         $val = $null
@@ -445,7 +446,7 @@ function Invoke-DaySync {
                         if ($skipReasons["bad_value"].sampleRows.Count -lt 5) {
                             $skipReasons["bad_value"].sampleRows += @{ table = $table.Alias; column = $name; raw = $rawTxt }
                         }
-                        Write-Log "  [$Day] WARN unreadable value nulled: $($table.Alias).[$name] raw='$rawTxt' ($_)"
+                        Write-Log "  [$Day] WARN unreadable value nulled: $($table.Alias).[$name] raw='$rawTxt' ($errMsg)"
                     }
 
                     if ($val -is [DBNull]) {
